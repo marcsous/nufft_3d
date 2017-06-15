@@ -2,38 +2,37 @@ classdef nufft_3d
 
     properties (SetAccess = immutable)
         
-        J      @ double scalar  = 4;  % kernel width (4)
-        u      @ double scalar  = 2;  % oversampling factor (2)
-        N      @ double = zeros(3,1); % final matrix dimensions       
-        K      @ double = zeros(3,1); % oversampled matrix dimensions
-        alpha  @ double scalar  = 0;  % kaiser-bessel parameter (0=use Fessler optimal)
-        radial @ logical scalar = 1;  % radial kernel (1=yes 0=no)
-        deap   @ logical scalar = 0;  % deapodization type (0=analytical 1=numerical)
-        gpu    @ logical scalar = 1;  % use gpuSparse instead of sparse (1=yes 0=no)
+        J      @double scalar  = 4;  % kernel width (4)
+        u      @double scalar  = 2;  % oversampling factor (2)
+        N      @double = zeros(3,1); % final matrix dimensions       
+        K      @double = zeros(3,1); % oversampled matrix dimensions
+        alpha  @double scalar  = 0;  % kaiser-bessel parameter (0=Fessler optimal)
+        radial @logical scalar = 1;  % radial kernel (1=yes 0=no)
+        deap   @logical scalar = 0;  % deapodization type (0=analytical 1=numerical)
+        gpu    @logical scalar = 1;  % use gpuSparse instead of sparse (1=yes 0=no)
 
-        H;                            % sparse interpolation matrix
-        HT;                           % transpose of H (faster if stored separately)
-        U;                            % deapodization matrix
-        d;                            % density weighting vector
+        H;                           % sparse interpolation matrix
+        HT;                          % transpose of H (faster if stored separately)
+        U;                           % deapodization matrix
+        d;                           % density weighting vector
 
     end
 
     methods
-
+        
         %% Constructor
-        function f = nufft_3d(om,N,J,u,alpha,radial,deap,gpu)
+        function obj = nufft_3d(om,N,varargin)
             
             % Non-uniform fourier transform (based on Fessler NUFFT).
             %
             % Inputs:
             %  om = trajectory centered at (0 0 0) units 1/fov [3 npts]
             %  N = final matrix dimensions (must be even number) [3 1]
-            %  J, u, alpha, etc.: (optional) override default values
+            %  varargin = string/value pairs, e.g. ('J',5)
             %
             % Output:
-            %  f = nufft object with precalculated coeffficients
+            %  obj = nufft object using sparse matrix coeffficients
             %
-
             if nargin==0
                 return; % 0 arg option needed for class constructor
             end 
@@ -44,72 +43,63 @@ classdef nufft_3d
                 N = 2 * ceil(max(max(abs(om),[],2),[],3));
                 warning('N argument not valid. Using [%i %i %i].',N)
             end
-            if exist('J','var') && ~isempty(J)
-                f.J = J;
-            end
-            if exist('u','var') && ~isempty(u)
-                f.u = u;
-            end
-            if exist('alpha','var') && ~isempty(alpha)
-                f.alpha = alpha;
-            else
-                f.alpha = f.J * spline([1 1.5 2 3],[1.5 2.05 2.34 2.6],f.u);
-            end
-            if exist('radial','var') && ~isempty(radial)
-                f.radial = radial;
-            end
-            if exist('deap','var') && ~isempty(deap)
-                f.deap = deap;
-            end
-            if exist('gpu','var') && ~isempty(gpu)
-                f.gpu = gpu;
-            end
 
-            %% check values, sizes, shapes, precision, etc.
-            if f.J<1 || f.J>6
-                error('value of J=%f is not recommended',f.J);
+            % varargin handling - must be field/value pairs, e.g. ('J',5)
+            for k = 1:2:numel(varargin)
+                if k==numel(varargin) || ~ischar(varargin{k})
+                    error('''varargin'' must be supplied in string/value pairs.');
+                end
+                obj.(varargin{k}) = varargin{k+1};
             end
-            if f.u<1 || f.u>4
-                error('value of u=%f is not recommended',f.u);
+            
+            %% check values, sizes, shapes, etc.
+            if obj.J<1 || obj.J>6
+                error('value of J=%f is not recommended',obj.J);
             end
-            if f.radial && f.u~=2
-                warning('radial kernel not tested with u=%f (try u=2).',f.u)
+            if obj.u<1 || obj.u>4
+                error('value of u=%f is not recommended',obj.u);
+            end
+            if obj.alpha==0 
+                obj.alpha = obj.J * spline([1 1.5 2 3],[1.5 2.05 2.34 2.6],obj.u);
+            end
+            if obj.radial && obj.u~=2
+                warning('radial kernel not tested with u=%f (try u=2).',obj.u)
             end
             if numel(N)==1 || numel(N)==3
-                f.N = ones(1,3).*reshape(N,1,[]); N = [];
+                obj.N = ones(1,3).*reshape(N,1,[]); N = [];
             else
                 error('N argument must be scalar or 3-vector.')
             end
             om = reshape(om,3,[]);
             
             % odd matrix sizes not tested - probably won't work
-            if any(mod(f.N,2))
+            if any(mod(obj.N,2))
                 error('matrix size must be even - not tested with odd values.')
             end
             
             % oversampled matrix size (must be even)
-            f.K = 2 * ceil(f.N * f.u / 2);
+            obj.K = 2 * ceil(obj.N * obj.u / 2);
 
             % display trajectory limits
             disp(' Trajectory:     min        max        matrix')
-            fprintf('   om(1):    %.3f       %.3f      %i\n',min(om(1,:)),max(om(1,:)),f.N(1))
-            fprintf('   om(2):    %.3f       %.3f      %i\n',min(om(2,:)),max(om(2,:)),f.N(2))           
-            fprintf('   om(3):    %.3f       %.3f      %i\n',min(om(3,:)),max(om(3,:)),f.N(3))
+            fprintf('   om(1):    %.3f       %.3f      %i\n',min(om(1,:)),max(om(1,:)),obj.N(1))
+            fprintf('   om(2):    %.3f       %.3f      %i\n',min(om(2,:)),max(om(2,:)),obj.N(2))           
+            fprintf('   om(3):    %.3f       %.3f      %i\n',min(om(3,:)),max(om(3,:)),obj.N(3))
             
             % convert trajectory to new units (double to avoid precision loss in H)
-            kx = f.u * double(om(1,:));
-            ky = f.u * double(om(2,:));
-            kz = f.u * double(om(3,:));
+            kx = obj.u * double(om(1,:));
+            ky = obj.u * double(om(2,:));
+            kz = obj.u * double(om(3,:));
            
             % only keep points that are within bounds
-            ok = abs(kx<f.K(1)/2) & abs(ky<f.K(2)/2) & abs(kz<f.K(3)/2);
+            ok = abs(kx<obj.K(1)/2) & abs(ky<obj.K(2)/2) & abs(kz<obj.K(3)/2);
             fprintf('  %i points (out of %i) are out of bounds.\n',sum(~ok),numel(ok))
 
 
             %% set up indicies and convolution coefficients
             
             % no. columns
-            ncol = prod(f.K);
+            ncol = prod(obj.K);
             
             % no. rows
             nrow = numel(ok);
@@ -125,36 +115,36 @@ classdef nufft_3d
             %  -non-transpose is faster to create due to sorted rows
             %  -non-tranpose is faster to multiply (HT*y >> H'*y)
             %
-            f.H  = sparse(nrow,ncol);
-            f.HT = sparse(ncol,nrow);
-            f.U = zeros(f.N,'single'); % deapodization matrix
+            obj.H  = sparse(nrow,ncol);
+            obj.HT = sparse(ncol,nrow);
+            obj.U = zeros(obj.N,'single'); % deapodization matrix
             
             % push to gpu if needed (try/catch fallback to cpu)
-            if f.gpu
+            if obj.gpu
                 try
-                    f.H  = gpuSparse(f.H);
-                    f.HT = gpuSparse(f.HT);
-                    f.U = gpuArray(f.U);
+                    obj.H  = gpuSparse(obj.H);
+                    obj.HT = gpuSparse(obj.HT);
+                    obj.U = gpuArray(obj.U);
                     kx = gpuArray(kx);
                     ky = gpuArray(ky);
                     kz = gpuArray(kz);
                     ok = gpuArray(ok);
                 catch ME
-                    f.gpu = 0;
+                    obj.gpu = 0;
                     warning('%s Setting gpu=0.',ME.message);
                 end
             end
            
             tic; fprintf(' Creating sparse matrix H     ');
 
-            for ix = 1:ceil(f.J)
-                for iy = 1:ceil(f.J)
-                    for iz = 1:ceil(f.J)
+            for ix = 1:ceil(obj.J)
+                for iy = 1:ceil(obj.J)
+                    for iz = 1:ceil(obj.J)
                         
                         % neighboring grid points: keep ix,iy,iz outside floor() to avoid problems
-                        x = floor(kx-f.J/2) + ix;
-                        y = floor(ky-f.J/2) + iy;
-                        z = floor(kz-f.J/2) + iz;
+                        x = floor(kx-obj.J/2) + ix;
+                        y = floor(ky-obj.J/2) + iy;
+                        z = floor(kz-obj.J/2) + iz;
                         
                         % Euclidian distance (squared) for the samples
                         dx2 = (x-kx).^2;
@@ -169,40 +159,40 @@ classdef nufft_3d
                         udist2 = ux2 + uy2 + uz2;
                         
                         % wrap out of bounds
-                        x = mod(x,f.K(1));
-                        y = mod(y,f.K(2));
-                        z = mod(z,f.K(3));
+                        x = mod(x,obj.K(1));
+                        y = mod(y,obj.K(2));
+                        z = mod(z,obj.K(3));
 
                         % sparse matrix indices
-                        if f.radial
+                        if obj.radial
                             % radial kernel
-                            i = find(ok & dist2 < f.J.^2/4);
-                            j = 1+x(i) + f.K(1)*y(i) + f.K(1)*f.K(2)*z(i);
-                            s = f.convkernel(dist2(i));
+                            i = find(ok & dist2 < obj.J.^2/4);
+                            j = 1+x(i) + obj.K(1)*y(i) + obj.K(1)*obj.K(2)*z(i);
+                            s = obj.convkernel(dist2(i));
                             % deapodization coefficients
-                            if f.deap && udist2 <= f.J.^2/4
-                                f.U(ix,iy,iz) = f.convkernel(udist2);
+                            if obj.deap && udist2 <= obj.J.^2/4
+                                obj.U(ix,iy,iz) = obj.convkernel(udist2);
                             end
                         else
                             % separable kernel
-                            i = find(ok & dx2 < f.J.^2/4 & dy2 < f.J.^2/4 & dz2 < f.J.^2/4);
-                            j = 1+x(i) + f.K(1)*y(i) + f.K(1)*f.K(2)*z(i);
-                            s = f.convkernel(dx2(i)).*f.convkernel(dy2(i)).*f.convkernel(dz2(i));
+                            i = find(ok & dx2<obj.J.^2/4 & dy2<obj.J.^2/4 & dz2<obj.J.^2/4);
+                            j = 1+x(i) + obj.K(1)*y(i) + obj.K(1)*obj.K(2)*z(i);
+                            s = obj.convkernel(dx2(i)).*obj.convkernel(dy2(i)).*obj.convkernel(dz2(i));
                             % deapodization coefficients
-                            if f.deap && ux2 <= f.J.^2/4 && uy2 <= f.J.^2/4 && uz2 <= f.J.^2/4
-                                f.U(ix,iy,iz) = f.convkernel(ux2).*f.convkernel(uy2).*f.convkernel(uz2);
+                            if obj.deap && ux2<=obj.J.^2/4 && uy2<=obj.J.^2/4 && uz2<=obj.J.^2/4
+                                obj.U(ix,iy,iz) = obj.convkernel(ux2).*obj.convkernel(uy2).*obj.convkernel(uz2);
                             end
                         end
 
                         % accumulate sparse matrix
-                        if f.gpu
-                            f.H = f.H + gpuSparse(i,j,s,nrow,ncol);
+                        if obj.gpu
+                            obj.H = obj.H + gpuSparse(i,j,s,nrow,ncol);
                         else
-                            f.HT = f.HT + sparse(j,i,s,ncol,nrow);
+                            obj.HT = obj.HT + sparse(j,i,s,ncol,nrow);
                         end
                         
                         % display progress
-                        fprintf('\b\b\b\b%-2d%% ',floor(100*sub2ind(ceil([f.J f.J f.J]),iz,iy,ix)/ceil(f.J).^3));
+                        fprintf('\b\b\b\b%-2d%% ',floor(100*sub2ind(ceil([obj.J obj.J obj.J]),iz,iy,ix)/ceil(obj.J).^3));
                     end
                 end
             end
@@ -214,104 +204,104 @@ classdef nufft_3d
             % un-transpose
             tic; fprintf(' Un-transposing sparse matrix. ');
             
-            if f.gpu
+            if obj.gpu
                 try
-                    f.HT = full_ctranspose(f.H);
+                    obj.HT = full_ctranspose(obj.H);
                 catch ME % out of memory?
-                    f.HT = f.H';
+                    obj.HT = obj.H';
                     warning('Using lazy transpose. %s',ME.message);
                 end
             else
-                f.H = f.HT';
+                obj.H = obj.HT';
             end
             toc
 
             % deapodization matrix
             tic; fprintf(' Creating deapodization function. ');
 
-            if f.deap
+            if obj.deap
                 
                 % numerical deapodization (with 2x oversampling)
                 for j = 1:3
-                    f.U = ifft(f.U*f.K(j),2*f.K(j),j,'symmetric');
-                    if j==1; f.U(1+N(1)/2:end-N(1)/2,:,:) = []; end
-                    if j==2; f.U(:,1+N(2)/2:end-N(2)/2,:) = []; end
-                    if j==3; f.U(:,:,1+N(3)/2:end-N(3)/2) = []; end
+                    obj.U = ifft(obj.U*obj.K(j),2*obj.K(j),j,'symmetric');
+                    if j==1; obj.U(1+N(1)/2:end-N(1)/2,:,:) = []; end
+                    if j==2; obj.U(:,1+N(2)/2:end-N(2)/2,:) = []; end
+                    if j==3; obj.U(:,:,1+N(3)/2:end-N(3)/2) = []; end
                 end
-                f.U = fftshift(f.U);
+                obj.U = fftshift(obj.U);
 
             else
                 
                 % analytical deapodization (Lewitt, J Opt Soc Am A 1990;7:1834)
                 if false
                     % centered: do not use, requires centered fftshifts, no advantage in accuracy
-                    x = ((1:f.N(1))-f.N(1)/2-0.5)./f.K(1);
-                    y = ((1:f.N(2))-f.N(2)/2-0.5)./f.K(2);
-                    z = ((1:f.N(3))-f.N(3)/2-0.5)./f.K(3);
+                    x = ((1:obj.N(1))-obj.N(1)/2-0.5)./obj.K(1);
+                    y = ((1:obj.N(2))-obj.N(2)/2-0.5)./obj.K(2);
+                    z = ((1:obj.N(3))-obj.N(3)/2-0.5)./obj.K(3);
                 else
                     % not centered: gives almost the same deapodization matrix as numerical
-                    x = ((1:f.N(1))-f.N(1)/2-1)./f.K(1);
-                    y = ((1:f.N(2))-f.N(2)/2-1)./f.K(2);
-                    z = ((1:f.N(3))-f.N(3)/2-1)./f.K(3);
+                    x = ((1:obj.N(1))-obj.N(1)/2-1)./obj.K(1);
+                    y = ((1:obj.N(2))-obj.N(2)/2-1)./obj.K(2);
+                    z = ((1:obj.N(3))-obj.N(3)/2-1)./obj.K(3);
                 end
                 [x y z] = ndgrid(x,y,z);
 
-                if f.radial
+                if obj.radial
                     % radial
-                    a = f.J/2;
-                    C = 4*pi*a.^3/f.bessi0(f.alpha);
+                    a = obj.J/2;
+                    C = 4*pi*a.^3/obj.bessi0(obj.alpha);
                     R = realsqrt(x.^2 + y.^2 + z.^2);
                     
-                    k = 2*pi*a*R < f.alpha;
-                    sigma = realsqrt(f.alpha.^2 - (2*pi*a*R(k)).^2);
-                    f.U(k) = C * (cosh(sigma)./sigma.^2 - sinh(sigma)./sigma.^3);
-                    sigma = realsqrt((2*pi*a*R(~k)).^2 - f.alpha.^2);
-                    f.U(~k) = C * (sin(sigma)./sigma.^3 - cos(sigma)./sigma.^2);
+                    k = 2*pi*a*R < obj.alpha;
+                    sigma = realsqrt(obj.alpha.^2 - (2*pi*a*R(k)).^2);
+                    obj.U(k) = C * (cosh(sigma)./sigma.^2 - sinh(sigma)./sigma.^3);
+                    sigma = realsqrt((2*pi*a*R(~k)).^2 - obj.alpha.^2);
+                    obj.U(~k) = C * (sin(sigma)./sigma.^3 - cos(sigma)./sigma.^2);
                 else
                     % separable
-                    a = f.J/2;
-                    C = 2*a/f.bessi0(f.alpha);
+                    a = obj.J/2;
+                    C = 2*a/obj.bessi0(obj.alpha);
                     
-                    k = 2*pi*a*abs(x) < f.alpha;
-                    sigma = realsqrt(f.alpha.^2 - (2*pi*a*x(k)).^2);
-                    f.U(k) = C * (sinh(sigma)./sigma);
-                    sigma = realsqrt((2*pi*a*x(~k)).^2 - f.alpha.^2);
-                    f.U(~k) = C * (sin(sigma)./sigma);
+                    k = 2*pi*a*abs(x) < obj.alpha;
+                    sigma = realsqrt(obj.alpha.^2 - (2*pi*a*x(k)).^2);
+                    obj.U(k) = C * (sinh(sigma)./sigma);
+                    sigma = realsqrt((2*pi*a*x(~k)).^2 - obj.alpha.^2);
+                    obj.U(~k) = C * (sin(sigma)./sigma);
                     
-                    k = 2*pi*a*abs(y) < f.alpha;
-                    sigma = realsqrt(f.alpha.^2 - (2*pi*a*y(k)).^2);
-                    f.U(k) = C * (sinh(sigma)./sigma) .* f.U(k);
-                    sigma = realsqrt((2*pi*a*y(~k)).^2 - f.alpha.^2);
-                    f.U(~k) = C * (sin(sigma)./sigma) .* f.U(~k);
+                    k = 2*pi*a*abs(y) < obj.alpha;
+                    sigma = realsqrt(obj.alpha.^2 - (2*pi*a*y(k)).^2);
+                    obj.U(k) = C * (sinh(sigma)./sigma) .* obj.U(k);
+                    sigma = realsqrt((2*pi*a*y(~k)).^2 - obj.alpha.^2);
+                    obj.U(~k) = C * (sin(sigma)./sigma) .* obj.U(~k);
                     
-                    k = 2*pi*a*abs(z) < f.alpha;
-                    sigma = realsqrt(f.alpha.^2 - (2*pi*a*z(k)).^2);
-                    f.U(k) = C * (sinh(sigma)./sigma) .* f.U(k);
-                    sigma = realsqrt((2*pi*a*z(~k)).^2 - f.alpha.^2);
-                    f.U(~k) = C * (sin(sigma)./sigma) .* f.U(~k);
+                    k = 2*pi*a*abs(z) < obj.alpha;
+                    sigma = realsqrt(obj.alpha.^2 - (2*pi*a*z(k)).^2);
+                    obj.U(k) = C * (sinh(sigma)./sigma) .* obj.U(k);
+                    sigma = realsqrt((2*pi*a*z(~k)).^2 - obj.alpha.^2);
+                    obj.U(~k) = C * (sin(sigma)./sigma) .* obj.U(~k);
                 end
                 
             end
             toc
 
             % turn into a deconvolution (catch div by zero)
-            f.U = 1 ./ hypot(f.U, eps);
-            if f.gpu; f.U = gpuArray(f.U); end
+            obj.U = 1 ./ hypot(obj.U, eps);
+            if obj.gpu; obj.U = gpuArray(obj.U); end
 
             % we are going to do a lot of ffts of the same size so tune it
             fftw('planner','measure');
 
             % calculate density weighting
-            f.d = f.density(ok);
+            obj.d = obj.density(ok);
 
             % display properties
-            fprintf(' Created'); disp(f);
-            w = whos('f');
+            fprintf(' Created'); disp(obj);
+            w = whos('obj');
             fprintf('\n')
-            fprintf('\t H: [%ix%i] (nonzeros %i) %0.1fMbytes\n',size(f.H),nnz(f.H),w.bytes/1e6);
-            fprintf('\tHT: [%ix%i] (nonzeros %i) %0.1fMbytes\n',size(f.HT),nnz(f.HT),w.bytes/1e6);
-            fprintf('\t U: [%ix%ix%i] min=%f max=%f\n',size(f.U),min(f.U(:)),max(f.U(:)))
-            fprintf('\t d: [%ix%i] (zeros %i) min=%f max=%f\n',size(f.d),nnz(~f.d),min(f.d(~~f.d)),max(f.d))
+            fprintf('\t H: [%ix%i] (nonzeros %i) %0.1fMbytes\n',size(obj.H),nnz(obj.H),w.bytes/1e6);
+            fprintf('\tHT: [%ix%i] (nonzeros %i) %0.1fMbytes\n',size(obj.HT),nnz(obj.HT),w.bytes/1e6);
+            fprintf('\t U: [%ix%ix%i] min=%f max=%f\n',size(obj.U),min(obj.U(:)),max(obj.U(:)))
+            fprintf('\t d: [%ix%i] (zeros %i) min=%f max=%f\n',size(obj.d),nnz(~obj.d),min(obj.d(~~obj.d)),max(obj.d))
             fprintf('\n')
   
         end
@@ -319,35 +309,35 @@ classdef nufft_3d
         %% utility functions
         
         % sparse matrix vector multiply (keep all the hacks in one place)
-        function y = spmv(f,k)
-            if f.gpu
+        function y = spmv(obj,k)
+            if obj.gpu
                 y = single(k);
-                y = f.H * y;
+                y = obj.H * y;
             else
                 y = double(k);
-                y = f.HT' * y;
+                y = obj.HT' * y;
                 y = full(y);
                 y = single(y);
             end
         end
         
         % sparse transpose matrix vector multiply (keep all the hacks in one place)
-        function y = spmv_t(f,k)
-            if f.gpu
+        function y = spmv_t(obj,k)
+            if obj.gpu
                 y = single(k);
-                y = f.HT * y;
+                y = obj.HT * y;
             else
                 y = double(k);
-                y = f.H' * y;
+                y = obj.H' * y;
                 y = full(y);
                 y = single(y);
             end
         end
         
         % 3d fft with pre-fft padding (cartesian kspace <- cartesian image)
-        function k = fft3_pad(f,k)
+        function k = fft3_pad(obj,k)
             for j = 1:3
-                pad = (f.K(j) - f.N(j)) / 2;
+                pad = (obj.K(j) - obj.N(j)) / 2;
                 if j==1; k = padarray(k,[pad 0 0]); end
                 if j==2; k = padarray(k,[0 pad 0]); end
                 if j==3; k = padarray(k,[0 0 pad]); end
@@ -356,10 +346,10 @@ classdef nufft_3d
         end
 
         % 3d ifft with post-ifft cropping (cartesian image <- cartesian kspace)
-        function x = ifft3_crop(f,x)
+        function x = ifft3_crop(obj,x)
             for j = 1:3
-                scale = f.K(j) / f.N(j); % undo ifft scaling and reapply with correct size
-                crop = (f.K(j) - f.N(j)) / 2;
+                scale = obj.K(j) / obj.N(j); % undo ifft scaling and reapply with correct size
+                crop = (obj.K(j) - obj.N(j)) / 2;
                 x = ifftshift(ifft(x,[],j),j).*scale;
                 if j==1; x = x(1+crop:end-crop,:,:); end
                 if j==2; x = x(:,1+crop:end-crop,:); end
@@ -368,31 +358,31 @@ classdef nufft_3d
         end
 
         % forward non-uniform FT (irregular kspace <- cartesian image)
-        function k = fNUFT(f,x)
+        function k = fNUFT(obj,x)
             % k = A * x
-            k = reshape(x,f.N);
-            k = k.*f.U;
-            k = f.fft3_pad(k);
+            k = reshape(x,obj.N);
+            k = k.*obj.U;
+            k = obj.fft3_pad(k);
             k = reshape(k,[],1);
-            k = f.spmv(k);
+            k = obj.spmv(k);
         end
         
         % adjoint non-uniform FT (cartesian image <- irregular kspace)
-        function x = aNUFT(f,k)
+        function x = aNUFT(obj,k)
             % x = A' * k
             x = reshape(k,[],1);
-            x = f.spmv_t(x);
-            x = reshape(x,f.K);
-            x = f.ifft3_crop(x);
-            x = x.*f.U;
+            x = obj.spmv_t(x);
+            x = reshape(x,obj.K);
+            x = obj.ifft3_crop(x);
+            x = x.*obj.U;
         end
         
         % image projection operator (image <- image)
-        function y = iprojection(f,x,damping,W)
+        function y = iprojection(obj,x,damping,W)
             % y = A' * W * D * W * A * x
-            y = f.fNUFT(x);
-            y = (W.^2.*f.d).*y; % density weighting included
-            y = f.aNUFT(y);
+            y = obj.fNUFT(x);
+            y = (W.^2.*obj.d).*y; % density weighting included
+            y = obj.aNUFT(y);
             y = reshape(y,size(x));
             if ~isscalar(damping)
                 damping = reshape(damping,size(x));
@@ -401,11 +391,11 @@ classdef nufft_3d
         end
 
         % phase constrained projection operator (image <- image)
-        function y = pprojection(f,x,damping,phase_constraint,W,P)
+        function y = pprojection(obj,x,damping,phase_constraint,W,P)
             % y = P' * A' * W * D * W * A * P * x + penalty on imag(x)
             P = reshape(P,size(x));
             y = P.*x;
-            y = f.iprojection(y,damping,W);
+            y = obj.iprojection(y,damping,W);
             if ~isscalar(phase_constraint)
                 phase_constraint = reshape(phase_constraint,size(x));
             end
@@ -413,7 +403,7 @@ classdef nufft_3d
         end
 
         % replacement for matlab besseli function (from Numerical Recipes in C)
-        function ans = bessi0(f,ax)
+        function ans = bessi0(obj,ax)
             ans = zeros(size(ax),'like',ax);
             
             % ax<3.75
@@ -432,21 +422,21 @@ classdef nufft_3d
         end
         
         % convolution kernel (no error checking, out of bounds will cause an error)
-        function s = convkernel(f,dist2)
-            s = f.bessi0(f.alpha*realsqrt(1-dist2/(f.J/2).^2)) / f.bessi0(f.alpha);
-            %s = besseli(0,f.alpha*realsqrt(1-dist2/(f.J/2).^2)) / besseli(0,f.alpha);
+        function s = convkernel(obj,dist2)
+            s = obj.bessi0(obj.alpha*realsqrt(1-dist2/(obj.J/2).^2)) / obj.bessi0(obj.alpha);
+            %s = besseli(0,obj.alpha*realsqrt(1-dist2/(obj.J/2).^2)) / besseli(0,obj.alpha);
         end
         
         % use with svds/eigs to calculate singular values of projection operator
-        function y = svds_func(f,x,tflag)
+        function y = svds_func(obj,x,tflag)
             damping = 0; W = 1;
-            if f.gpu; x = gpuArray(x); end
-            y = f.iprojection(x,damping,W);
-            if f.gpu; y = gather(y); end
+            if obj.gpu; x = gpuArray(x); end
+            y = obj.iprojection(x,damping,W);
+            if obj.gpu; y = gather(y); end
         end
         
         %% density estimation
-        function d = density(f,ok)
+        function d = density(obj,ok)
 
             % Pipe's method 
             maxiter = 10;
@@ -457,7 +447,7 @@ classdef nufft_3d
 
             % iterative refinement
             for j = 1:maxiter
-                q = f.spmv(f.spmv_t(d));
+                q = obj.spmv(obj.spmv_t(d));
                 d = d ./ hypot(q, eps); % prevent div by zero
             end
             
@@ -465,7 +455,7 @@ classdef nufft_3d
             if false
                 % s = max. sval of A'DA: should be 1 if d is scaled correctly
                 opts = struct('issym',1,'isreal',0,'tol',1e-3);
-                s = eigs(@f.svds_func, prod(f.N), 1, 'lm', opts);
+                s = eigs(@obj.svds_func, prod(obj.N), 1, 'lm', opts);
             else
                 % s = norm of D = diag(d): also not correct but fast
                 s = max(d);
@@ -476,7 +466,7 @@ classdef nufft_3d
         end
         
         %% inverse non-uniform FT (cartesian image <- irregular kspace)
-        function im = iNUFT(f,raw,tol,maxiter,damping,phase_constraint,W)
+        function im = iNUFT(obj,raw,tol,maxiter,damping,phase_constraint,W)
             
             % raw = complex raw data [npts nc ne] or [nr ny nc ne]
             % maxiter = no. iterations (0=poorly scaled regridding 1=well-scaled regridding)
@@ -486,7 +476,7 @@ classdef nufft_3d
             % W = weighting vector [scalar, ny or nr*ny] (only applies when maxiter>1)
 
             % no. data points
-            nrow = size(f.H,1);
+            nrow = size(obj.H,1);
             
             % size checks
             if size(raw,1)==nrow
@@ -563,17 +553,17 @@ classdef nufft_3d
             fprintf('  maxiter=%i tol=%.1e damping=%.3f phase_constraint=%.3f weighted=%i\n',maxiter,tol,damping,phase_constraint,~isscalar(W))
             
  			% experimental method to inhibit noise amplification at edges of image
- 			damping = damping * f.U / min(f.U(:));
+ 			damping = damping * obj.U / min(obj.U(:));
 
             %  push to gpu if needed
-            if f.gpu
+            if obj.gpu
                 W = gpuArray(W);
                 damping = gpuArray(damping);
                 phase_constraint = gpuArray(phase_constraint);
             end
 
             % array for the final images
-            im = zeros([size(f.U) nc nte],'single');
+            im = zeros([size(obj.U) nc nte],'single');
 
             % reconstruction. note: don't use parfor in these loops, it is REALLY slow
             tic
@@ -583,17 +573,17 @@ classdef nufft_3d
                     if maxiter==0 || phase_constraint
                         
                         % regridding x = (A'Db). hard to scale correctly, prefer pcg with 1 iteration
-                        x = f.aNUFT(f.d.*raw(:,c,e));
+                        x = obj.aNUFT(obj.d.*raw(:,c,e));
                         
                     else
 
                         % least squares (A'W^2DA)(x) = (A'W^2Db)
-                        b = f.aNUFT((W.^2.*f.d).*raw(:,c,e));
+                        b = obj.aNUFT((W.^2.*obj.d).*raw(:,c,e));
                         
                         % correct form for solver
                         b = reshape(b,[],1);
                         
-                        [x,~,relres,iter] = pcgpc(@(x)f.iprojection(x,damping,W),b,tol,maxiter);
+                        [x,~,relres,iter] = pcgpc(@(x)obj.iprojection(x,damping,W),b,tol,maxiter);
                         %fprintf('  pcg finished at iteration=%i with relres=%.3e\n',iter,relres);
                         
                     end
@@ -602,7 +592,7 @@ classdef nufft_3d
                     if phase_constraint
 
 					    % use non-constrained estimate for low-resolution phase
-                        x = reshape(x,size(f.U));
+                        x = reshape(x,size(obj.U));
 
                         % smooth in image space so voxel size is independent of osf
                         h = hamming(11);
@@ -614,7 +604,7 @@ classdef nufft_3d
                         P = exp(i*angle(P));
 
                         % RHS vector
-                        b = conj(P).*f.aNUFT((W.^2.*f.d).*raw(:,c,e));
+                        b = conj(P).*obj.aNUFT((W.^2.*obj.d).*raw(:,c,e));
 
                         % correct form for solver
                         P = reshape(P,[],1);
@@ -622,7 +612,7 @@ classdef nufft_3d
 
                         % phase constrained (P'A'W^2DAP)(P'x) = (P'A'W^2Db) with penalty on imag(P'x)
                         % (REF: Bydder & Robson, Magnetic Resonance in Medicine 2005;53:1393)
-                        [x,~,relres,iter] = pcgpc(@(x)f.pprojection(x,damping,phase_constraint,W,P),b,tol,maxiter);
+                        [x,~,relres,iter] = pcgpc(@(x)obj.pprojection(x,damping,phase_constraint,W,P),b,tol,maxiter);
                         %fprintf('  pcg finished at iteration=%i with relres=%.3e\n',iter,relres);
                         
                         % put back the low resolution phase
@@ -631,7 +621,7 @@ classdef nufft_3d
                     end
                     
                     % reshape into image format
-                    im(:,:,:,c,e) = reshape(gather(x),size(f.U));
+                    im(:,:,:,c,e) = reshape(gather(x),size(obj.U));
 
                 end
             end
