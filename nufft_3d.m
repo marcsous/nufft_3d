@@ -92,7 +92,7 @@ classdef nufft_3d
             kz = obj.u * double(om(3,:));
            
             % only keep points that are within bounds
-            ok = abs(kx<obj.K(1)/2) & abs(ky<obj.K(2)/2) & abs(kz<obj.K(3)/2);
+            ok = abs(kx)<obj.K(1)/2 & abs(ky)<obj.K(2)/2 & abs(kz)<obj.K(3)/2;
             fprintf('  %i points (out of %i) are out of bounds.\n',sum(~ok),numel(ok))
 
 
