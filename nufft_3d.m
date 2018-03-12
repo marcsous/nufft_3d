@@ -186,6 +186,7 @@ classdef nufft_3d
 
                         % accumulate sparse matrix
                         if obj.gpu
+                            i = int32(i); j = int32(j); s = single(s);
                             obj.H = obj.H + gpuSparse(i,j,s,nrow,ncol);
                         else
                             obj.HT = obj.HT + sparse(j,i,s,ncol,nrow);
@@ -196,7 +197,7 @@ classdef nufft_3d
                     end
                 end
             end
-            toc
+            fprintf('\b. '); toc
 
             % free memory for GPU
             clear dist2 dx2 dy2 dz2 kx ky kz x y z i j k s
@@ -381,7 +382,7 @@ classdef nufft_3d
         function y = iprojection(obj,x,damping,W)
             % y = A' * W * D * W * A * x
             y = obj.fNUFT(x);
-            y = (W.^2.*obj.d).*y; % density weighting included
+            y = (W.*obj.d).*y; % density weighting included
             y = obj.aNUFT(y);
             y = reshape(y,size(x));
             if ~isscalar(damping)
@@ -399,7 +400,7 @@ classdef nufft_3d
             if ~isscalar(phase_constraint)
                 phase_constraint = reshape(phase_constraint,size(x));
             end
-            y = conj(P).*y + i.*phase_constraint.^2.*imag(x);
+            y = conj(P).*y + i.*phase_constraint.*imag(x);
         end
 
         % replacement for matlab besseli function (from Numerical Recipes in C)
@@ -439,25 +440,25 @@ classdef nufft_3d
         function d = density(obj,ok)
 
             % Pipe's method 
-            maxiter = 10;
+            maxit = 10;
             fprintf(' Calculating density. '); tic
 
             % initial estimate (preserve zeros = out of bounds)
             d = reshape(ok,[],1);
 
             % iterative refinement
-            for j = 1:maxiter
+            for j = 1:maxit
                 q = obj.spmv(obj.spmv_t(d));
                 d = d ./ hypot(q, eps); % prevent div by zero
             end
             
             % scale so regridding gives similar result to least squares: not working
             if false
-                % s = max. sval of A'DA: should be 1 if d is scaled correctly
+                % s = max sval of A'DA: should be 1 if d is scaled correctly
                 opts = struct('issym',1,'isreal',0,'tol',1e-3);
                 s = eigs(@obj.svds_func, prod(obj.N), 1, 'lm', opts);
             else
-                % s = norm of D = diag(d): also not correct but fast
+                % s = norm of diag(d): not correct but fast
                 s = max(d);
             end
             d = d ./ s;
@@ -466,14 +467,14 @@ classdef nufft_3d
         end
         
         %% inverse non-uniform FT (cartesian image <- irregular kspace)
-        function im = iNUFT(obj,raw,tol,maxiter,damping,phase_constraint,W)
+        function im = iNUFT(obj,raw,tol,maxit,damping,phase_constraint,W)
             
             % raw = complex raw data [npts nc ne] or [nr ny nc ne]
-            % maxiter = no. iterations (0=poorly scaled regridding 1=well-scaled regridding)
-            % tol = tolerance (tol=0 allows early termination, only applies when maxiter>1)
-            % damping = Tikhonov regularization term (only applies when maxiter>1)
-            % phase_constraint = phase constraint term (only applies when maxiter>1)
-            % W = weighting vector [scalar, ny or nr*ny] (only applies when maxiter>1)
+            % maxit [scalar] = no. iterations (0=poorly scaled regridding 1=well-scaled regridding)
+            % tol [scalar] = tolerance (tol=0 allows early termination, only applies when maxit>1)
+            % damping [scalar] = Tikhonov regularization term (only applies when maxit>1)
+            % phase_constraint [scalar] = phase constraint term (only applies when maxit>1)
+            % W [scalar, ny or nr*ny] = data weighting (only applies when maxit>1)
 
             % no. data points
             nrow = size(obj.H,1);
@@ -482,7 +483,7 @@ classdef nufft_3d
             if size(raw,1)==nrow
                 nc = size(raw,2);
                 nte = size(raw,3);
-                fprintf('  %s received raw data: npts=%i nc=%i ne=%i.\n',mfilename,nrow,nc,nte);
+                fprintf('  %s received raw data: npts=%i nc=%i ne=%i\n',mfilename,nrow,nc,nte);
             else
                 nr = size(raw,1); % assume readout points
                 ny = size(raw,2); % assume no. of spokes
@@ -496,10 +497,10 @@ classdef nufft_3d
             raw = reshape(raw,nrow,nc,nte);
 
             % optional argument checks
-            if ~exist('maxiter','var') || isempty(maxiter)
-                maxiter = 1;
+            if ~exist('maxit','var') || isempty(maxit)
+                maxit = 1;
             else
-                validateattributes(maxiter,{'numeric'},{'scalar','finite','integer','nonnegative'},'','maxiter');
+                validateattributes(maxit,{'numeric'},{'scalar','finite','integer','nonnegative'},'','maxit');
             end
             if ~exist('tol','var') || isempty(tol)
                 tol = [];
@@ -538,20 +539,23 @@ classdef nufft_3d
             end
 
             % damping, weighting and phase_constraint require iterative recon
-            if ~isempty(tol) && maxiter<=1
-                error('tol is only active when maxiter>1.');
+            if ~isempty(tol) && maxit<=1
+                error('tol is only active when maxit>1.');
             end
-            if damping~=0 && maxiter<=1
-                error('damping is only active when maxiter>1.');
+            if damping~=0 && maxit<=1
+                error('damping is only active when maxit>1.');
             end
-            if ~isscalar(W) && maxiter<=1
-                error('weighting is only active when maxiter>1.');
+            if ~isscalar(W) && maxit<=1
+                error('weighting is only active when maxit>1.');
             end
-            if phase_constraint~=0 && maxiter<=1
-                error('phase constraint is only active when maxiter>1.');
+            if phase_constraint~=0 && maxit<=1
+                error('phase constraint is only active when maxit>1.');
             end
-            fprintf('  maxiter=%i tol=%.1e damping=%.3f phase_constraint=%.3f weighted=%i\n',maxiter,tol,damping,phase_constraint,~isscalar(W))
-            
+
+			% display
+            fprintf('  maxit=%i tol=%.1e damping=%.1e ',maxit,tol,damping);
+			fprintf('phase_constraint=%.1e weighted=%i\n',phase_constraint,~isscalar(W));
+
  			% experimental method to inhibit noise amplification at edges of image
  			damping = damping * obj.U / min(obj.U(:));
 
@@ -570,21 +574,21 @@ classdef nufft_3d
             for e = 1:nte
                 for c = 1:nc
 
-                    if maxiter==0 || phase_constraint
+                    if maxit==0 || phase_constraint
                         
                         % regridding x = (A'Db). hard to scale correctly, prefer pcg with 1 iteration
                         x = obj.aNUFT(obj.d.*raw(:,c,e));
                         
                     else
 
-                        % least squares (A'W^2DA)(x) = (A'W^2Db)
-                        b = obj.aNUFT((W.^2.*obj.d).*raw(:,c,e));
+                        % least squares (A'WDA)(x) = (A'Db)
+                        b = obj.aNUFT((W.*obj.d).*raw(:,c,e));
                         
                         % correct form for solver
                         b = reshape(b,[],1);
                         
-                        [x,~,relres,iter] = pcgpc(@(x)obj.iprojection(x,damping,W),b,tol,maxiter);
-                        %fprintf('  pcg finished at iteration=%i with relres=%.3e\n',iter,relres);
+                        [x,~,relres,iter] = pcgpc(@(x)obj.iprojection(x,damping,W),b,tol,maxit);
+                        fprintf('  pcgpc finished at iteration=%i with relres=%.3e\n',iter,relres);
                         
                     end
                    
@@ -604,16 +608,16 @@ classdef nufft_3d
                         P = exp(i*angle(P));
 
                         % RHS vector
-                        b = conj(P).*obj.aNUFT((W.^2.*obj.d).*raw(:,c,e));
+                        b = conj(P).*obj.aNUFT((W.*obj.d).*raw(:,c,e));
 
                         % correct form for solver
                         P = reshape(P,[],1);
                         b = reshape(b,[],1);
 
-                        % phase constrained (P'A'W^2DAP)(P'x) = (P'A'W^2Db) with penalty on imag(P'x)
+                        % phase constrained (P'A'WDAP)(P'x) = (P'A'WDb) with penalty on imag(P'x)
                         % (REF: Bydder & Robson, Magnetic Resonance in Medicine 2005;53:1393)
-                        [x,~,relres,iter] = pcgpc(@(x)obj.pprojection(x,damping,phase_constraint,W,P),b,tol,maxiter);
-                        %fprintf('  pcg finished at iteration=%i with relres=%.3e\n',iter,relres);
+                        [x,~,relres,iter] = pcgpc(@(x)obj.pprojection(x,damping,phase_constraint,W,P),b,tol,maxit);
+                        fprintf('  pcgpc finished at iteration=%i with relres=%.3e\n',iter,relres);
                         
                         % put back the low resolution phase
                         x = P.*x;
