@@ -1,26 +1,27 @@
 function [x,flag,relres,iter,resvec] = pcgpc(A,b,tol,maxit,M1,M2,x0)
-%[x,flag,relres,iter,resvec] = pcgpc(A,b,tol,maxit,M1,M2,x0)
 %
-% Preconditioned conjugate gradient (pcg) solver with modifications
-% to support the use of a penalty on Im(x), aka phase constraint.
+% Preconditioned conjugate gradient solver with modifications to
+% support the use of a penalty on Im(x), aka phase constraint.
 %
-% Designed to be used with anonymous functions, A = @(x)myfunc(x),
-% where myfunc(x) should return one of the following:
-%  A*x           : to minimize ||b-Ax||
-%  A*x+λ*x       : to minimize ||b-Ax|| with penalty on ||x||
-%  A*x+i*λ*Im(x) : to minimize ||b-Ax|| with penalty on ||Im(x)||
+% Meant to be used with anonymous functions, A = @(x)myfunc(x),
+% where myfunc(x) should return:
+% - A*x           : minimize ||b-Ax||
+% - A*x+λ*x       : minimize ||b-Ax|| with penalty on ||x||
+% - A*x+i*λ*Im(x) : minimize ||b-Ax|| with penalty on ||Im(x)||
 %
 % References:
-%  Partial Fourier Partially Parallel Imaging,
+% - Partial Fourier Partially Parallel Imaging
 %   Mark Bydder and Matthew D. Robson (MRM 2005;53:1393)
-%  An Introduction to the CG Method Without the Agonizing Pain,
+% - An Introduction to the CG Method Without the Agonizing Pain
 %   Jonathan Richard Shewchuk (1994)
 %
-% Key differences versus pcg:
-%  Uses the real part only of the dot products.
-%  Tries to minimize memory usage (helps on GPU).
-%  M2 preconditioning method is not supported.
-%  Set tol=0 to terminate according to (Bazan, LAA 2014;21:316).
+% Key modifications:
+% - use the real part only of the dot products
+% - clear variables to minimize memory usage (GPU)
+% - make return args compatible with matlab's pcg
+% - (experimental) set tol=0 to terminate early (Bazan, 2014)
+%
+% Usage: see Matlab's pcg function (except M2 is not supported)
 
 % check arguments
 if nargin<2; error('Not enough input arguments.'); end
@@ -85,7 +86,7 @@ while maxit>0
     % successful termination
     if resvec(iter)<tol*delta0; flag = 0; break; end
 
-    % early termination (Bazan 2014)
+    % early termination (Bazan et al, Linear Algebra Appl. 2014;21:316)
     psi(iter) = resvec(iter).*solvec(iter);
     if tol==0 && iter>3 && psi(iter) > psi(iter-1); flag = 5; break; end
 
@@ -114,13 +115,17 @@ else
 end
 
 % return arguments
-if nargout>2
-
-    % remeasure residual for accuracy
+if nargout~=1
+    
+    % remeasure final residual
     resvec(end) = norm(b-A(x));
     
-    % for matlab compatiblity
+    % matlab compatiblity
     resvec = reshape(resvec,[],1);
     relres = resvec(end)./delta0;
 
+    % display
+    fprintf('%s terminated at iteration %i (flag %i): relres = %e. ',mfilename,iter,flag,relres); toc(t);
+
 end
+
