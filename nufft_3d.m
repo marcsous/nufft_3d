@@ -588,7 +588,7 @@ classdef nufft_3d
                         b = reshape(b,[],1);
                         
                         [x,~,relres,iter] = pcgpc(@(x)obj.iprojection(x,damping,W),b,tol,maxit);
-                        fprintf('  pcgpc finished at iteration=%i with relres=%.3e\n',iter,relres);
+                        %fprintf('  pcg finished at iteration=%i with relres=%.3e\n',iter,relres);
                         
                     end
                    
@@ -617,7 +617,7 @@ classdef nufft_3d
                         % phase constrained (P'A'WDAP)(P'x) = (P'A'WDb) with penalty on imag(P'x)
                         % (REF: Bydder & Robson, Magnetic Resonance in Medicine 2005;53:1393)
                         [x,~,relres,iter] = pcgpc(@(x)obj.pprojection(x,damping,phase_constraint,W,P),b,tol,maxit);
-                        fprintf('  pcgpc finished at iteration=%i with relres=%.3e\n',iter,relres);
+                        %fprintf('  pcg finished at iteration=%i with relres=%.3e\n',iter,relres);
                         
                         % put back the low resolution phase
                         x = P.*x;
