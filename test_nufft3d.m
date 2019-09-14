@@ -7,7 +7,8 @@ im = phantom3d(N); % 3d shepp logan phantom
 im(im==1) = i; % add phase to make it realistic
 
 %% generate koosh ball data
-nRadialSpokes = 5000;
+nInterleaves = 21; % Fibonacci number
+nRadialSpokes = fix(5000 / nInterleaves) * nInterleaves;
 
 % a density adapted readout (kind of...)
 grad = [linspace(0,1,20) ones(1,20) linspace(1,0,N).^1.25];
@@ -21,7 +22,7 @@ om = zeros(3,numel(traj),nRadialSpokes,'single');
 
 for k = 1:nRadialSpokes
     
-    % Golden angle (http://blog.wolfram.com/2011/07/28/how-i-made-wine-glasses-from-sunflowers)
+    % golden angle (http://blog.wolfram.com/2011/07/28/how-i-made-wine-glasses-from-sunflowers)
     dH = 1 - 2 * (k-1) / (nRadialSpokes-1);
     AzimuthalAngle(k) = acos(dH);
     PolarAngle(k) = max(k-1,0) * pi * (3 - sqrt(5));
@@ -42,6 +43,10 @@ for k = 1:nRadialSpokes
     
 end
 
+% sort into interleaves (works for golden angle)
+k = reshape(1:nRadialSpokes,nInterleaves,[])';
+om = reshape(om(:,:,k),3,numel(traj),[],nInterleaves);
+
 %% create nufft object
 obj = nufft_3d(om,N);
 
@@ -56,8 +61,8 @@ done = obj.iNUFT(data,maxit);
 
 %% display
 subplot(1,3,1);
-plot3(squeeze(om(1,end,:)),squeeze(om(2,end,:)),squeeze(om(3,end,:)),'.');
-title('sampling'); grid on;
+plot3(squeeze(om(1,end,:,1))',squeeze(om(2,end,:,1))',squeeze(om(3,end,:,1))','.');
+title('interleave 1'); grid on;
 subplot(1,3,2); imagesc(abs(im(:,:,N/2)),[0 1]); colorbar; title('original');
 subplot(1,3,3); imagesc(abs(done(:,:,N/2)),[0 1]); colorbar; title('radial');
 
