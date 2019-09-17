@@ -25,6 +25,8 @@ classdef nufft_3d
         radial(1,1) double = 1     % radial kernel (1=yes 0=no)
         deap(1,1) = 0              % deapodization (0=analytical 1=numerical)
         gpu(1,1) double = 1        % use gpuSparse instead of sparse (1=yes 0=no)
+        lowpass(1,1) double = 2    % low pass filter given by exp(-(-n:n)^2/n)
+        
         H(:,:);                    % sparse interpolation matrix
         HT(:,:);                   % transpose of H (faster if stored separately)
         U(:,:,:);                  % deapodization matrix
@@ -37,12 +39,16 @@ classdef nufft_3d
         %% constructor
         function obj = nufft_3d(om,N,varargin)
 
-            if nargin==0; return; end % required for constructor
+            if nargin==0
+                return; % default constructor required
+            end 
             if ~isnumeric(om) || isempty(om) || size(om,1)~=3
                 error('om must be an array with leading dimension of 3')
+            else
+                om = reshape(om,3,[]); % remove unnecessary shape
             end
             if ~exist('N','var') || isempty(N)
-                N = 2 * ceil(max(max(abs(om),[],2),[],3));
+                N = 2 * ceil(max(abs(om),[],2)); % assume centered at [0 0 0]
                 warning(sprintf('N argument not supplied - using [%i %i %i].',N))
             end
 
@@ -67,12 +73,14 @@ classdef nufft_3d
             if obj.radial && obj.u~=2
                 warning('radial kernel not tested with u=%f (try u=2).',obj.u)
             end
+            if ~isscalar(obj.lowpass) || obj.lowpass<0 || mod(obj.lowpass,1)
+                error('lowpass must be a nonnegative integer');
+            end
             if (numel(N)==1 || numel(N)==3) && isnumeric(N) && ~any(mod(N,2))
                 obj.N = ones(3,1).*reshape(N,[],1); N = [];
             else
-                error('N argument must be scalar or 3-vector of integers.')
+                error('N argument must be scalar or 3-vector of even integers.')
             end
-            om = reshape(om,3,[]);
             
             % oversampled matrix size (must be even)
             obj.K = 2 * ceil(obj.N * obj.u / 2);
@@ -83,7 +91,7 @@ classdef nufft_3d
             fprintf('   om(2):    %.3f       %.3f      %i\n',min(om(2,:)),max(om(2,:)),obj.N(2))           
             fprintf('   om(3):    %.3f       %.3f      %i\n',min(om(3,:)),max(om(3,:)),obj.N(3))
             
-            % convert trajectory to new units (double to avoid precision loss in H)
+            % convert trajectory to new units (double to avoid precision loss)
             kx = obj.u * double(om(1,:));
             ky = obj.u * double(om(2,:));
             kz = obj.u * double(om(3,:));
@@ -282,8 +290,9 @@ classdef nufft_3d
             end
             toc
 
-            % turn into a deconvolution (catch div by zero)
-            obj.U = 1 ./ hypot(obj.U, eps);
+            % turn into deconvolution (div by zero shouldn't happen for good alpha)
+            center = sub2ind(obj.N,obj.N(1)/2+1,obj.N(2)/2+1,obj.N(3)/2+1);
+            obj.U = 1 ./ hypot(obj.U, eps(obj.U(center)));
             if obj.gpu; obj.U = gpuArray(obj.U); end
 
             % we are going to do a lot of ffts of the same size so tune it
@@ -403,10 +412,11 @@ classdef nufft_3d
             fprintf('  maxit=%i damping=%.1e ',maxit,damping);
 			fprintf('phase_constraint=%.1e weighted=%i\n',phase_constraint,~isscalar(W));
 
- 			% experimental method to inhibit noise amplification at edges of image
- 			damping = damping * obj.U / min(obj.U(:));
+ 			% experimental method to inhibit noise amplification at edges
+            center = sub2ind(obj.N,obj.N(1)/2+1,obj.N(2)/2+1,obj.N(3)/2+1);
+ 			damping = damping * sqrt(obj.U / obj.U(center));
 
-            %  push to gpu if needed
+            %  send to gpu if needed
             if obj.gpu
                 W = gpuArray(W);
                 damping = gpuArray(damping);
@@ -423,15 +433,15 @@ classdef nufft_3d
 
                     if maxit==0 || phase_constraint
                         
-                        % regridding x = (A'Db). hard to scale correctly, prefer pcg with 1 iteration
+                        % regridding x = A'Db (hard to scale correctly, prefer pcg with 1 iteration)
                         x = obj.aNUFT(obj.d.*raw(:,c,e));
                         
                     else
 
-                        % least squares (A'WDA)(x) = (A'Db)
+                        % least squares (A'WDA)x = (A'Db)
                         b = obj.aNUFT((W.*obj.d).*raw(:,c,e));
                         
-                        % correct form for solver
+                        % correct shape for solver
                         b = reshape(b,[],1);
                         
                         [x,~,relres,iter] = pcgpc(@(x)obj.iprojection(x,damping,W),b,[],maxit);
@@ -439,25 +449,24 @@ classdef nufft_3d
                         
                     end
                    
-                    % phase constrained: need to use pcgpc (real dot products) instead of pcg
+                    % phase constrained: use pcgpc (real dot products) instead of pcg
                     if phase_constraint
 
-					    % use non-constrained estimate for low-resolution phase
-                        x = reshape(x,size(obj.U));
-
-                        % smooth in image space so voxel size is independent of osf
-                        h = hamming(11);
-                        P = fftshift(x); % shift center to mitigate edge effects
+					    % extract low-resolution phase (smooth in image space)
+                        h = exp(-(-obj.lowpass:obj.lowpass).^2 / obj.lowpass);
+                        
+                        P = reshape(x,size(obj.U));
+                        P = fftshift(P); % mitigate edge effects
                         P = convn(P,reshape(h,numel(h),1,1),'same');
                         P = convn(P,reshape(h,1,numel(h),1),'same');
                         P = convn(P,reshape(h,1,1,numel(h)),'same');
-                        P = ifftshift(P); % shift center back to origin
+                        P = ifftshift(P); % shift back again
                         P = exp(i*angle(P));
 
                         % RHS vector
                         b = conj(P).*obj.aNUFT((W.*obj.d).*raw(:,c,e));
 
-                        % correct form for solver
+                        % correct shape for solver
                         P = reshape(P,[],1);
                         b = reshape(b,[],1);
 
@@ -607,7 +616,7 @@ classdef nufft_3d
             % iterative refinement
             for j = 1:maxit
                 q = obj.spmv(obj.spmv_t(d));
-                d = d ./ hypot(q, eps); % prevent div by zero
+                d = d ./ hypot(q, eps(max(q)));
             end
             
             % scale so regridding gives similar result to least squares: not working
