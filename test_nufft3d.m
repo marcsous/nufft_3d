@@ -57,7 +57,9 @@ data = data+noise;
 
 %% reconstruction (inverse transform)
 maxit = 10; % 0 or 1 for gridding, higher values for conjugate gradient
-done = obj.iNUFT(data,maxit);
+damp = 0; % Tikhonov penalty on ||x||
+partial = 0; % Tikhobov penalty on ||imag(x))||
+done = obj.iNUFT(data,maxit,damp,partial);
 
 %% display
 subplot(1,3,1);
