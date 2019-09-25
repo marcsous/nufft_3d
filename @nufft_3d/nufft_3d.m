@@ -23,7 +23,7 @@ classdef nufft_3d
         K(3,1) double = zeros(3,1) % oversampled matrix dimensions
         alpha(1,1) double = 0      % kaiser-bessel parameter (0=Fessler optimal)
         radial(1,1) double = 1     % radial kernel (1=yes 0=no)
-        deap(1,1) = 0              % deapodization (0=analytical 1=numerical)
+        deap(1,1) logical = 0      % deapodization (0=analytical 1=numerical)
         gpu(1,1) double = 1        % use gpuSparse instead of sparse (1=yes 0=no)
         lowpass(1,1) double = 2    % low pass filter given by exp(-(-n:n)^2/n)
         
@@ -122,7 +122,6 @@ classdef nufft_3d
             %
             obj.H  = sparse(nrow,ncol);
             obj.HT = sparse(ncol,nrow);
-            obj.U = zeros(obj.N','single'); % deapodization matrix
             
             % push to gpu if needed (try/catch fallback to cpu)
             if obj.gpu
@@ -174,7 +173,7 @@ classdef nufft_3d
                             i = find(ok & dist2 < obj.J.^2/4);
                             j = 1+x(i) + obj.K(1)*y(i) + obj.K(1)*obj.K(2)*z(i);
                             s = obj.convkernel(dist2(i));
-                            % deapodization coefficients
+                            % numerical deapodization (2x oversampling)
                             if obj.deap && udist2 <= obj.J.^2/4
                                 obj.U(ix,iy,iz) = obj.convkernel(udist2);
                             end
@@ -183,7 +182,7 @@ classdef nufft_3d
                             i = find(ok & dx2<obj.J.^2/4 & dy2<obj.J.^2/4 & dz2<obj.J.^2/4);
                             j = 1+x(i) + obj.K(1)*y(i) + obj.K(1)*obj.K(2)*z(i);
                             s = obj.convkernel(dx2(i)).*obj.convkernel(dy2(i)).*obj.convkernel(dz2(i));
-                            % deapodization coefficients
+                            % numerical deapodization (2x oversampling)
                             if obj.deap && ux2<=obj.J.^2/4 && uy2<=obj.J.^2/4 && uz2<=obj.J.^2/4
                                 obj.U(ix,iy,iz) = obj.convkernel(ux2).*obj.convkernel(uy2).*obj.convkernel(uz2);
                             end
@@ -227,17 +226,20 @@ classdef nufft_3d
 
             if obj.deap
                 
-                % numerical deapodization (with 2x oversampling)
+                % numerical deapodization (remove 2x oversampling)
                 for j = 1:3
                     obj.U = ifft(obj.U*obj.K(j),2*obj.K(j),j,'symmetric');
-                    if j==1; obj.U(1+N(1)/2:end-N(1)/2,:,:) = []; end
-                    if j==2; obj.U(:,1+N(2)/2:end-N(2)/2,:) = []; end
-                    if j==3; obj.U(:,:,1+N(3)/2:end-N(3)/2) = []; end
+                    if j==1; obj.U(1+obj.N(1)/2:end-obj.N(1)/2,:,:) = []; end
+                    if j==2; obj.U(:,1+obj.N(2)/2:end-obj.N(2)/2,:) = []; end
+                    if j==3; obj.U(:,:,1+obj.N(3)/2:end-obj.N(3)/2) = []; end
                 end
                 obj.U = fftshift(obj.U);
 
             else
-                
+ 
+                % analytical deapodization (kaiser bessel)
+                obj.U = zeros(obj.N','single');
+
                 % analytical deapodization (Lewitt, J Opt Soc Am A 1990;7:1834)
                 if false
                     % centered: do not use, requires centered fftshifts, no advantage in accuracy
@@ -245,7 +247,7 @@ classdef nufft_3d
                     y = ((1:obj.N(2))-obj.N(2)/2-0.5)./obj.K(2);
                     z = ((1:obj.N(3))-obj.N(3)/2-0.5)./obj.K(3);
                 else
-                    % not centered: gives almost the same deapodization matrix as numerical
+                    % not centered: gives essentially the same deapodization matrix as numerical
                     x = ((1:obj.N(1))-obj.N(1)/2-1)./obj.K(1);
                     y = ((1:obj.N(2))-obj.N(2)/2-1)./obj.K(2);
                     z = ((1:obj.N(3))-obj.N(3)/2-1)./obj.K(3);
