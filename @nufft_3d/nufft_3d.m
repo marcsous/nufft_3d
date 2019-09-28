@@ -24,8 +24,8 @@ classdef nufft_3d
         alpha(1,1) double = 0      % kaiser-bessel parameter (0=Fessler optimal)
         radial(1,1) double = 1     % radial kernel (1=yes 0=no)
         deap(1,1) logical = 0      % deapodization (0=analytical 1=numerical)
-        gpu(1,1) double = 1        % use gpuSparse instead of sparse (1=yes 0=no)
-        lowpass(1,1) double = 2    % low pass filter given by exp(-(-n:n)^2/n)
+        gpu(1,1) logical = 1       % use gpuSparse instead of sparse (1=yes 0=no)
+        lowpass(1,1) double = 2    % low pass filter given by exp(-(-n:n).^2/n)
         
         H(:,:);                    % sparse interpolation matrix
         HT(:,:);                   % transpose of H (faster if stored separately)
@@ -40,7 +40,7 @@ classdef nufft_3d
         function obj = nufft_3d(om,N,varargin)
 
             if nargin==0
-                return; % default constructor required
+                return; % default constructor required by MATLAB
             end 
             if ~isnumeric(om) || isempty(om) || size(om,1)~=3
                 error('om must be an array with leading dimension of 3')
@@ -128,7 +128,6 @@ classdef nufft_3d
                 try
                     obj.H  = gpuSparse(obj.H);
                     obj.HT = gpuSparse(obj.HT);
-                    obj.U = gpuArray(obj.U);
                     kx = gpuArray(kx);
                     ky = gpuArray(ky);
                     kz = gpuArray(kz);
@@ -238,7 +237,7 @@ classdef nufft_3d
             else
  
                 % analytical deapodization (kaiser bessel)
-                obj.U = zeros(obj.N','single');
+                obj.U = zeros(obj.N');
 
                 % analytical deapodization (Lewitt, J Opt Soc Am A 1990;7:1834)
                 if false
@@ -295,7 +294,7 @@ classdef nufft_3d
             % turn into deconvolution (div by zero shouldn't happen for good alpha)
             center = sub2ind(obj.N,obj.N(1)/2+1,obj.N(2)/2+1,obj.N(3)/2+1);
             obj.U = 1 ./ hypot(obj.U, eps(obj.U(center)));
-            if obj.gpu; obj.U = gpuArray(obj.U); end
+            if obj.gpu; obj.U = gpuArray(single(obj.U)); end
 
             % we are going to do a lot of ffts of the same size so tune it
             fftw('planner','measure');
@@ -410,11 +409,11 @@ classdef nufft_3d
                 error('phase constraint is only active when maxit>1.');
             end
 
-			% display
+	    % display
             fprintf('  maxit=%i damping=%.1e ',maxit,damping);
 			fprintf('phase_constraint=%.1e weighted=%i\n',phase_constraint,~isscalar(W));
 
- 			% experimental method to inhibit noise amplification at edges
+            % experimental method to inhibit noise amplification at edges
             center = sub2ind(obj.N,obj.N(1)/2+1,obj.N(2)/2+1,obj.N(3)/2+1);
  			damping = damping * sqrt(obj.U / obj.U(center));
 
@@ -426,7 +425,7 @@ classdef nufft_3d
             end
 
             % array for the final images
-            im = zeros([size(obj.U) nc nte],'single');
+            im = zeros([obj.N' nc nte],'single');
 
             % reconstruction. note: don't use parfor in these loops, it is REALLY slow
             tic
@@ -454,7 +453,7 @@ classdef nufft_3d
                     % phase constrained: use pcgpc (real dot products) instead of pcg
                     if phase_constraint
 
-					    % extract low-resolution phase (smooth in image space)
+			% extract low-resolution phase (smooth in image space)
                         h = exp(-(-obj.lowpass:obj.lowpass).^2 / obj.lowpass);
                         
                         P = reshape(x,size(obj.U));
@@ -483,7 +482,7 @@ classdef nufft_3d
                     end
                     
                     % reshape into image format
-                    im(:,:,:,c,e) = reshape(gather(x),size(obj.U));
+                    im(:,:,:,c,e) = reshape(gather(x),obj.N');
 
                 end
             end
@@ -575,17 +574,17 @@ classdef nufft_3d
         % replacement for matlab besseli function (from Numerical Recipes in C)
         function ans = bessi0(obj,ax)
             ans = zeros(size(ax),'like',ax);
-            
+
             % ax<3.75
             k=ax<3.75;
-            y=ax(k)./3.75;
+            y=ax(k)/3.75;
             y=y.^2;
             ans(k)=1.0+y.*(3.5156229+y.*(3.0899424+y.*(1.2067492+...
-                   y.*(0.2659732+y.*(0.360768e-1+y.*0.45813e-2)))));
+                       y.*(0.2659732+y.*(0.360768e-1+y.*0.45813e-2)))));
  
             % ax>=3.75
             k=~k;
-            y=3.75./ax(k);
+            y=3.75/ax(k);
             ans(k)=(exp(ax(k))./realsqrt(ax(k))).*(0.39894228+y.*(0.1328592e-1+...
                    y.*(0.225319e-2+y.*(-0.157565e-2+y.*(0.916281e-2+y.*(-0.2057706e-1+...
                    y.*(0.2635537e-1+y.*(-0.1647633e-1+y.*0.392377e-2))))))));
@@ -630,7 +629,7 @@ classdef nufft_3d
                 % s = norm of diag(d): not correct but fast
                 s = max(d);
             end
-            d = d ./ s;
+            d = d / s;
             toc
 
         end
@@ -638,4 +637,3 @@ classdef nufft_3d
     end
     
 end
-
