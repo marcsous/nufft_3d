@@ -1,6 +1,7 @@
 classdef nufft_3d
     
     % Non-uniform 3D fourier transform (based on Fessler NUFFT).
+    % If available, uses gpu sparse or gpuSparse matrices.
     %
     % Inputs:
     %  om = trajectory centered at (0 0 0) units 1/fov [3 npts]
@@ -11,27 +12,22 @@ classdef nufft_3d
     %  obj = nufft object using sparse matrix coefficients
     
     properties (SetAccess = immutable)
-        
         J(1,1) double = 5          % kernel width (5)
         u(1,1) double = 2          % oversampling factor (2)
-        N(3,1) double = zeros(3,1) % final matrix dimensions
-        
+        N(3,1) double = zeros(3,1) % final image dimensions
     end
     
     properties (SetAccess = immutable, Hidden = true)
-        
-        K(3,1) double = zeros(3,1) % oversampled matrix dimensions
         alpha(1,1) double = 0      % kaiser-bessel parameter (0=Fessler optimal)
-        radial(1,1) double = 1     % radial kernel (1=yes 0=no)
+        radial(1,1) logical = 1    % radial kernel (1=yes 0=no)
         deap(1,1) logical = 0      % deapodization (0=analytical 1=numerical)
-        gpu(1,1) logical = 1       % use gpuSparse instead of sparse (1=yes 0=no)
-        lowpass(1,1) double = 2    % low pass filter given by exp(-(-n:n).^2/n)
-        
+        gpu(1,1) logical = 0       % use gpuSparse instead of cpu (1=yes 0=no)
+        lowpass(1,1) double = 1    % low pass filter given by exp(-(-n:n).^2/n)
+        K(3,1) double = zeros(3,1) % oversampled image dimensions        
         H(:,:);                    % sparse interpolation matrix
         HT(:,:);                   % transpose of H (faster if stored separately)
         U(:,:,:);                  % deapodization matrix
         d(:,1);                    % density weighting vector
-        
     end
 
     methods
@@ -126,8 +122,13 @@ classdef nufft_3d
             % push to gpu if needed (try/catch fallback to cpu)
             if obj.gpu
                 try
-                    obj.H  = gpuSparse(obj.H);
-                    obj.HT = gpuSparse(obj.HT);
+                    if exist('gpuSparse','class')
+                        obj.H  = gpuSparse(obj.H);
+                        obj.HT = gpuSparse(obj.HT);
+                    else
+                        obj.H = gpuArray(obj.H);
+                        obj.HT = gpuArray(obj.HT);
+                    end
                     kx = gpuArray(kx);
                     ky = gpuArray(ky);
                     kz = gpuArray(kz);
@@ -186,25 +187,23 @@ classdef nufft_3d
                                 obj.U(ix,iy,iz) = obj.convkernel(ux2).*obj.convkernel(uy2).*obj.convkernel(uz2);
                             end
                         end
-
+                        
                         % accumulate sparse matrix
                         if obj.gpu
-                            i = int32(i); j = int32(j); s = single(s);
                             obj.H = obj.H + gpuSparse(i,j,s,nrow,ncol);
                         else
                             obj.HT = obj.HT + sparse(j,i,s,ncol,nrow);
                         end
-                        
+           
                         % display progress
                         fprintf('\b\b\b\b%-2d%% ',floor(100*sub2ind(ceil([obj.J obj.J obj.J]),iz,iy,ix)/ceil(obj.J).^3));
                     end
                 end
             end
             fprintf('\b. '); toc
-
-            % free memory for GPU
-            clear dist2 dx2 dy2 dz2 kx ky kz x y z i j k s
             
+            clear dist2 dx2 dy2 dz2 kx ky kz x y z i j k s
+
             % un-transpose
             tic; fprintf(' Un-transposing sparse matrix. ');
             
@@ -327,7 +326,7 @@ classdef nufft_3d
             % x = A' * k
             x = reshape(k,[],1);
             x = obj.spmv_t(x);
-            x = reshape(x,obj.K);
+            x = reshape(x,obj.K');
             x = obj.ifft3_crop(x);
             x = x.*obj.U;
         end
@@ -409,7 +408,7 @@ classdef nufft_3d
                 error('phase constraint is only active when maxit>1.');
             end
 
-	    % display
+            % display
             fprintf('  maxit=%i damping=%.1e ',maxit,damping);
 			fprintf('phase_constraint=%.1e weighted=%i\n',phase_constraint,~isscalar(W));
 
@@ -425,7 +424,13 @@ classdef nufft_3d
             end
 
             % array for the final images
-            im = zeros([obj.N' nc nte],'single');
+            if obj.gpu
+                raw = single(raw);
+                im = zeros([obj.N' nc nte],'single');
+            else
+                raw = double(raw);
+                im = zeros([obj.N' nc nte],'double');
+            end
 
             % reconstruction. note: don't use parfor in these loops, it is REALLY slow
             tic
@@ -453,7 +458,7 @@ classdef nufft_3d
                     % phase constrained: use pcgpc (real dot products) instead of pcg
                     if phase_constraint
 
-			% extract low-resolution phase (smooth in image space)
+			           % extract low-resolution phase (smooth in image space)
                         h = exp(-(-obj.lowpass:obj.lowpass).^2 / obj.lowpass);
                         
                         P = reshape(x,size(obj.U));
@@ -505,7 +510,6 @@ classdef nufft_3d
                 y = double(k);
                 y = obj.HT' * y;
                 y = full(y);
-                y = single(y);
             end
         end
         
@@ -518,7 +522,6 @@ classdef nufft_3d
                 y = double(k);
                 y = obj.H' * y;
                 y = full(y);
-                y = single(y);
             end
         end
         
@@ -577,14 +580,14 @@ classdef nufft_3d
 
             % ax<3.75
             k=ax<3.75;
-            y=ax(k)/3.75;
+            y=ax(k)./3.75;
             y=y.^2;
             ans(k)=1.0+y.*(3.5156229+y.*(3.0899424+y.*(1.2067492+...
                        y.*(0.2659732+y.*(0.360768e-1+y.*0.45813e-2)))));
  
             % ax>=3.75
             k=~k;
-            y=3.75/ax(k);
+            y=3.75./ax(k);
             ans(k)=(exp(ax(k))./realsqrt(ax(k))).*(0.39894228+y.*(0.1328592e-1+...
                    y.*(0.225319e-2+y.*(-0.157565e-2+y.*(0.916281e-2+y.*(-0.2057706e-1+...
                    y.*(0.2635537e-1+y.*(-0.1647633e-1+y.*0.392377e-2))))))));
