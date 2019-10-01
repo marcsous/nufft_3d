@@ -122,13 +122,8 @@ classdef nufft_3d
             % push to gpu if needed (try/catch fallback to cpu)
             if obj.gpu
                 try
-                    if exist('gpuSparse','class')
-                        obj.H  = gpuSparse(obj.H);
-                        obj.HT = gpuSparse(obj.HT);
-                    else
-                        obj.H = gpuArray(obj.H);
-                        obj.HT = gpuArray(obj.HT);
-                    end
+                    obj.H  = gpuSparse(obj.H);
+                    obj.HT = gpuSparse(obj.HT);
                     kx = gpuArray(kx);
                     ky = gpuArray(ky);
                     kz = gpuArray(kz);
