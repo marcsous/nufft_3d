@@ -20,7 +20,6 @@ classdef nufft_3d
     properties (SetAccess = immutable, Hidden = true)
         alpha(1,1) double = 0      % kaiser-bessel parameter (0=Fessler optimal)
         radial(1,1) logical = 1    % radial kernel (1=yes 0=no)
-        deap(1,1) logical = 0      % deapodization (0=analytical 1=numerical)
         gpu(1,1) logical = 0       % use gpuSparse instead of cpu (1=yes 0=no)
         lowpass(1,1) double = 1    % low pass filter given by exp(-(-n:n).^2/n)
         K(3,1) double = zeros(3,1) % oversampled image dimensions        
@@ -87,13 +86,13 @@ classdef nufft_3d
             fprintf('   om(2):    %.3f       %.3f      %i\n',min(om(2,:)),max(om(2,:)),obj.N(2))           
             fprintf('   om(3):    %.3f       %.3f      %i\n',min(om(3,:)),max(om(3,:)),obj.N(3))
             
-            % convert trajectory to new units (double to avoid precision loss)
+            % convert trajectory to new units (double to avoid precision loss later)
             kx = obj.u * double(om(1,:));
             ky = obj.u * double(om(2,:));
             kz = obj.u * double(om(3,:));
            
             % only keep points that are within bounds
-            ok = abs(kx<obj.K(1)/2) & abs(ky<obj.K(2)/2) & abs(kz<obj.K(3)/2);
+            ok = abs(kx)<obj.K(1)/2 & abs(ky)<obj.K(2)/2 & abs(kz)<obj.K(3)/2;
             fprintf('  %i points (out of %i) are out of bounds.\n',sum(~ok),numel(ok))
 
 
@@ -140,7 +139,7 @@ classdef nufft_3d
                 for iy = 1:ceil(obj.J)
                     for iz = 1:ceil(obj.J)
                         
-                        % neighboring grid points: keep ix,iy,iz outside floor() to avoid problems
+                        % neighboring grid points: keep ix,iy,iz outside floor() to avoid rounding weirdness
                         x = floor(kx-obj.J/2) + ix;
                         y = floor(ky-obj.J/2) + iy;
                         z = floor(kz-obj.J/2) + iz;
@@ -169,7 +168,7 @@ classdef nufft_3d
                             j = 1+x(i) + obj.K(1)*y(i) + obj.K(1)*obj.K(2)*z(i);
                             s = obj.convkernel(dist2(i));
                             % numerical deapodization (2x oversampling)
-                            if obj.deap && udist2 <= obj.J.^2/4
+                            if udist2 <= obj.J.^2/4
                                 obj.U(ix,iy,iz) = obj.convkernel(udist2);
                             end
                         else
@@ -178,7 +177,7 @@ classdef nufft_3d
                             j = 1+x(i) + obj.K(1)*y(i) + obj.K(1)*obj.K(2)*z(i);
                             s = obj.convkernel(dx2(i)).*obj.convkernel(dy2(i)).*obj.convkernel(dz2(i));
                             % numerical deapodization (2x oversampling)
-                            if obj.deap && ux2<=obj.J.^2/4 && uy2<=obj.J.^2/4 && uz2<=obj.J.^2/4
+                            if ux2<=obj.J.^2/4 && uy2<=obj.J.^2/4 && uz2<=obj.J.^2/4
                                 obj.U(ix,iy,iz) = obj.convkernel(ux2).*obj.convkernel(uy2).*obj.convkernel(uz2);
                             end
                         end
@@ -199,9 +198,7 @@ classdef nufft_3d
             
             clear dist2 dx2 dy2 dz2 kx ky kz x y z i j k s
 
-            % un-transpose
-            tic; fprintf(' Un-transposing sparse matrix. ');
-            
+            % un-transpose           
             if obj.gpu
                 try
                     obj.HT = full_ctranspose(obj.H);
@@ -212,78 +209,15 @@ classdef nufft_3d
             else
                 obj.H = obj.HT';
             end
-            toc
 
-            % deapodization matrix
-            tic; fprintf(' Creating deapodization function. ');
-
-            if obj.deap
-                
-                % numerical deapodization (remove 2x oversampling)
-                for j = 1:3
-                    obj.U = ifft(obj.U*obj.K(j),2*obj.K(j),j,'symmetric');
-                    if j==1; obj.U(1+obj.N(1)/2:end-obj.N(1)/2,:,:) = []; end
-                    if j==2; obj.U(:,1+obj.N(2)/2:end-obj.N(2)/2,:) = []; end
-                    if j==3; obj.U(:,:,1+obj.N(3)/2:end-obj.N(3)/2) = []; end
-                end
-                obj.U = fftshift(obj.U);
-
-            else
- 
-                % analytical deapodization (kaiser bessel)
-                obj.U = zeros(obj.N');
-
-                % analytical deapodization (Lewitt, J Opt Soc Am A 1990;7:1834)
-                if false
-                    % centered: do not use, requires centered fftshifts, no advantage in accuracy
-                    x = ((1:obj.N(1))-obj.N(1)/2-0.5)./obj.K(1);
-                    y = ((1:obj.N(2))-obj.N(2)/2-0.5)./obj.K(2);
-                    z = ((1:obj.N(3))-obj.N(3)/2-0.5)./obj.K(3);
-                else
-                    % not centered: gives essentially the same deapodization matrix as numerical
-                    x = ((1:obj.N(1))-obj.N(1)/2-1)./obj.K(1);
-                    y = ((1:obj.N(2))-obj.N(2)/2-1)./obj.K(2);
-                    z = ((1:obj.N(3))-obj.N(3)/2-1)./obj.K(3);
-                end
-                [x y z] = ndgrid(x,y,z);
-
-                if obj.radial
-                    % radial
-                    a = obj.J/2;
-                    C = 4*pi*a.^3/obj.bessi0(obj.alpha);
-                    R = realsqrt(x.^2 + y.^2 + z.^2);
-                    
-                    k = 2*pi*a*R < obj.alpha;
-                    sigma = realsqrt(obj.alpha.^2 - (2*pi*a*R(k)).^2);
-                    obj.U(k) = C * (cosh(sigma)./sigma.^2 - sinh(sigma)./sigma.^3);
-                    sigma = realsqrt((2*pi*a*R(~k)).^2 - obj.alpha.^2);
-                    obj.U(~k) = C * (sin(sigma)./sigma.^3 - cos(sigma)./sigma.^2);
-                else
-                    % separable
-                    a = obj.J/2;
-                    C = 2*a/obj.bessi0(obj.alpha);
-                    
-                    k = 2*pi*a*abs(x) < obj.alpha;
-                    sigma = realsqrt(obj.alpha.^2 - (2*pi*a*x(k)).^2);
-                    obj.U(k) = C * (sinh(sigma)./sigma);
-                    sigma = realsqrt((2*pi*a*x(~k)).^2 - obj.alpha.^2);
-                    obj.U(~k) = C * (sin(sigma)./sigma);
-                    
-                    k = 2*pi*a*abs(y) < obj.alpha;
-                    sigma = realsqrt(obj.alpha.^2 - (2*pi*a*y(k)).^2);
-                    obj.U(k) = C * (sinh(sigma)./sigma) .* obj.U(k);
-                    sigma = realsqrt((2*pi*a*y(~k)).^2 - obj.alpha.^2);
-                    obj.U(~k) = C * (sin(sigma)./sigma) .* obj.U(~k);
-                    
-                    k = 2*pi*a*abs(z) < obj.alpha;
-                    sigma = realsqrt(obj.alpha.^2 - (2*pi*a*z(k)).^2);
-                    obj.U(k) = C * (sinh(sigma)./sigma) .* obj.U(k);
-                    sigma = realsqrt((2*pi*a*z(~k)).^2 - obj.alpha.^2);
-                    obj.U(~k) = C * (sin(sigma)./sigma) .* obj.U(~k);
-                end
-                
+            % deapodization matrix (remove 2x oversampling)
+            for j = 1:3
+                obj.U = ifft(obj.U*obj.K(j),2*obj.K(j),j,'symmetric');
+                if j==1; obj.U(1+obj.N(1)/2:end-obj.N(1)/2,:,:) = []; end
+                if j==2; obj.U(:,1+obj.N(2)/2:end-obj.N(2)/2,:) = []; end
+                if j==3; obj.U(:,:,1+obj.N(3)/2:end-obj.N(3)/2) = []; end
             end
-            toc
+	    obj.U = fftshift(obj.U);
 
             % turn into deconvolution (div by zero shouldn't happen for good alpha)
             center = sub2ind(obj.N,obj.N(1)/2+1,obj.N(2)/2+1,obj.N(3)/2+1);
@@ -409,7 +343,7 @@ classdef nufft_3d
 
             % experimental method to inhibit noise amplification at edges
             center = sub2ind(obj.N,obj.N(1)/2+1,obj.N(2)/2+1,obj.N(3)/2+1);
- 			damping = damping * sqrt(obj.U / obj.U(center));
+            damping = damping * sqrt(obj.U / obj.U(center));
 
             %  send to gpu if needed
             if obj.gpu
@@ -453,7 +387,7 @@ classdef nufft_3d
                     % phase constrained: use pcgpc (real dot products) instead of pcg
                     if phase_constraint
 
-			           % extract low-resolution phase (smooth in image space)
+			% extract low-resolution phase (smooth in image space)
                         h = exp(-(-obj.lowpass:obj.lowpass).^2 / obj.lowpass);
                         
                         P = reshape(x,size(obj.U));
