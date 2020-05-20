@@ -1,6 +1,6 @@
 %% inverse non-uniform FT (cartesian image <- irregular kspace)
 function im = iNUFT(obj,raw,maxit,damp,lambda,pruno,W)
-%im = iNUFT(obj,raw,maxit,damp,lambda,W)
+%im = iNUFT(obj,raw,maxit,damp,lambda,pruno,W)
 %
 % raw = complex raw kspace data [nr nc] or [nr ny nc]
 % maxit [scalar] = no. iterations (use 0 or 1 for regridding)
@@ -48,6 +48,7 @@ if ~exist('pruno','var') || isempty(pruno)
     pruno = 0;
 else
     if nc==1; error('pruno option requires multiple coils'); end
+    if lambda>0; error('pruno option not configured for lambda>0'); end
     validateattributes(pruno,{'numeric'},{'scalar','finite','binary'},'','pruno');
 end
 if ~exist('W','var') || isscalar(W) || isempty(W)
@@ -141,7 +142,7 @@ if pruno
     M = @(x) x./reshape(D,size(x)); % diagonal preconditioner -
     
     % check: measure diagonal of iprojection (V. SLOW)
-    if 1
+    if 0
         N = 200; % how many to test
         d = zeros(1,N);
         for j = 1:N
@@ -152,9 +153,6 @@ if pruno
         plot([d;D(1:N);d-D(1:N)]'); legend({'exact','estimate','diff'});
         keyboard
     end
-    
-    
-    
     
     % least squares (A'WA)(x) = (A'Wb) + penalty on ||null*x||   
     iters = 100; % need about 100
