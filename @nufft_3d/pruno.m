@@ -27,7 +27,7 @@ function K = pruno(obj,data,varargin)
 opts.width = 5; % kernel width
 opts.radial = 1; % radial kernel
 opts.noise = []; % noise std, if available
-opts.tol = 0.0; % threshold for singular values
+opts.tol = 0.01; % threshold for singular value filter
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
@@ -108,15 +108,21 @@ end
 sigma = opts.noise * sqrt(matrix_density*nx*ny);
 
 % un-square the singular values
-W = sqrt(W);
+W = sqrt(gather(W));
 
 % minimum variance filter
 f = max(0,1-sigma^2./W.^2);
+nv = nnz(f < 1-opts.tol);
+
+% display
+plot(W/W(1)); hold on; plot(f,'--'); hold off; xlim([0 numel(W)]);
+line(xlim,[1 1]*sigma/W(1),ylim,'linestyle',':','color','black');
+title(sprintf('tol=%.2f (%i nullspace vectors)',opts.tol,nv));
+legend({'singular values','filter','noise floor'}); drawnow;
 
 % make nullspace kernels: scale by (1-f)
 V = reshape(V,nc,nk,[]);
 V = permute(V,[2 1 3]);
-nv = nnz(f<1-opts.tol);
 
 K = zeros(numel(opts.kernel.mask),nc,nv,'like',V);
 for v = nv:-1:1
@@ -135,13 +141,6 @@ K = reshape(K,shape);
 K = ifft(K,obj.N(1),1) * obj.N(1);
 K = ifft(K,obj.N(2),2) * obj.N(2);
 K = ifft(K,obj.N(3),3) * obj.N(3);
-
-% display
-plot(W/W(1)); hold on; plot(f,'--'); hold off; xlim([0 numel(W)]);
-line([1 1]*(nk*nc-nv),ylim,'linestyle',':','color','black');
-title(sprintf('tol=%.2f (%i nullspace vectors)',opts.tol,nv));
-legend({'singular values','noise floor'}); drawnow;
-
 
 %% make normal calibration matrix (low memory)
 function AA = make_data_matrix(data,opts)

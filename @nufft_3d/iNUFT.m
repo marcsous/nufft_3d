@@ -6,7 +6,7 @@ function im = iNUFT(obj,raw,maxit,damp,lambda,pruno,W)
 % maxit [scalar] = no. iterations (use 0 or 1 for regridding)
 % damp [scalar] = Tikhonov regularization (only when maxit>1)
 % lambda [scalar] = phase constraint (only when maxit>1)
-% pruno [scalar] = use pruno parallel imaging (1=yes 0=no)
+% pruno [scalar] = pruno constraint (from 0-1, suggest 0.5)
 % W [scalar, ny or nr*ny] = weighting (only when maxit>1)
 %
 %% argument checks
@@ -49,7 +49,7 @@ if ~exist('pruno','var') || isempty(pruno)
 else
     if nc==1; error('pruno option requires multiple coils'); end
     if lambda>0; error('pruno option not configured for lambda>0'); end
-    validateattributes(pruno,{'numeric'},{'scalar','finite','binary'},'','pruno');
+    validateattributes(pruno,{'numeric'},{'scalar','finite','nonnegative'},'','pruno');
 end
 if ~exist('W','var') || isscalar(W) || isempty(W)
     W = 1;
@@ -84,8 +84,8 @@ if lambda~=0 && maxit<=1
 end
 
 %% finalize setup
-fprintf('  maxit=%i damp=%.1e',maxit,damp);
-fprintf(' lambda=%.1e weighted=%i\n',lambda,~isscalar(W));
+fprintf('  maxit=%i damp=%.2f lambda=%.2f',maxit,damp,lambda);
+fprintf(' pruno=%.1f weighted=%i\n',pruno,~isscalar(W));
 
 % send to gpu if needed
 if obj.gpu
@@ -129,7 +129,7 @@ if pruno
     x = fft(fft(fft(x,[],1),[],2),[],3); % kspace
     
     % make the nulling kernels
-    obj.fnull = obj.pruno(x,'tol',0);
+    obj.fnull = obj.pruno(x) * pruno;
     obj.anull = conj(obj.fnull);
 
     % correct RHS for solver 
@@ -138,13 +138,13 @@ if pruno
 
     % in Cartesian the diagonal of iprojection is the mean of
     % the sample weighting squared (used as a preconditioner)
-    D = dwsd + damp^2 + real(sum(obj.anull.*obj.fnull,5));
+    D = obj.dwsd + damp^2 + real(sum(obj.anull.*obj.fnull,5));
     M = @(x) x./reshape(D,size(x)); % diagonal preconditioner -
     
     % check: measure diagonal of iprojection (V. SLOW)
     if 0
         N = 200; % how many to test
-        d = zeros(1,N);
+        d = zeros(1,N,'like',D);
         for j = 1:N
             tmp = zeros(size(D));
             tmp(j) = 1; tmp = obj.iprojection(tmp,damp,W);
@@ -153,6 +153,9 @@ if pruno
         plot([d;D(1:N);d-D(1:N)]'); legend({'exact','estimate','diff'});
         keyboard
     end
+    
+    
+    
     
     % least squares (A'WA)(x) = (A'Wb) + penalty on ||null*x||   
     iters = 100; % need about 100
