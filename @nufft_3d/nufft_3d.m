@@ -105,6 +105,9 @@ classdef nufft_3d
             if mod(obj.N(1),2) || mod(obj.N(2),2) % allow z=1 for 2D
                 error('N must be an even integer');
             end
+            if all(om(3,:)==0) % catch z=1 case for 2D
+                obj.N(3) = 1;
+            end
             
             % oversampled matrix size (must be even)
             obj.K = 2 * ceil(obj.N * obj.u / 2);

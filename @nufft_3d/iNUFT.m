@@ -1,13 +1,20 @@
 %% inverse non-uniform FT (cartesian image <- irregular kspace)
-function im = iNUFT(obj,raw,maxit,damp,lambda,pruno,W)
-%im = iNUFT(obj,raw,maxit,damp,lambda,pruno,W)
+function im = iNUFT(obj,raw,maxit,damp,W,constraint,lambda)
+%im = iNUFT(obj,raw,maxit,damp,W,constraint,lambda)
 %
-% raw = complex raw kspace data [nr nc] or [nr ny nc]
-% maxit [scalar] = no. iterations (use 0 or 1 for regridding)
-% damp [scalar] = Tikhonov regularization (only when maxit>1)
-% lambda [scalar] = phase constraint (only when maxit>1)
-% pruno [scalar] = pruno constraint (from 0-1, suggest 0.5)
-% W [scalar, ny or nr*ny] = weighting (only when maxit>1)
+% -raw = complex raw kspace data [nr nc] or [nr ny nc]
+% -maxit [scalar] = no. iterations (use 0 or 1 for regridding)
+% -damp [scalar] = Tikhonov regularization (only when maxit>1)
+% -W [scalar, ny or nr*ny] = weighting (only when maxit>1)
+%
+% Experimental (only when maxit>1)
+% -constraint = 'phase-constraint','compressed-sensing','parallel-imaging'
+% -lambda [scalar] = regularization parameter (suggested: 0.5, 1e-3, 0.5)
+%
+% The constraints can often produce slightly better images but require
+% tweaking of lambda. They are implemented as mutually exclusive options
+% for evaluation but actually they can be used simultaneously at great
+% computational cost and probably marginal benefit.
 %
 %% argument checks
 
@@ -30,7 +37,7 @@ raw = reshape(raw,nrow,nc);
 
 % optional argument checks
 if ~exist('maxit','var') || isempty(maxit)
-    maxit = 0; % default to regridding
+    maxit = 10; % default to iterative
 else
     validateattributes(maxit,{'numeric'},{'scalar','finite','integer','nonnegative'},'','maxit');
 end
@@ -38,18 +45,6 @@ if ~exist('damp','var') || isempty(damp)
     damp = 0;
 else
     validateattributes(damp,{'numeric'},{'scalar','finite','nonnegative'},'','damp');
-end
-if ~exist('lambda','var') || isempty(lambda)
-    lambda = 0;
-else
-    validateattributes(lambda,{'numeric'},{'scalar','finite','nonnegative'},'','lambda');
-end
-if ~exist('pruno','var') || isempty(pruno)
-    pruno = 0;
-else
-    if nc==1; error('pruno option requires multiple coils'); end
-    if lambda>0; error('pruno option not configured for lambda>0'); end
-    validateattributes(pruno,{'numeric'},{'scalar','finite','nonnegative'},'','pruno');
 end
 if ~exist('W','var') || isscalar(W) || isempty(W)
     W = 1;
@@ -71,21 +66,39 @@ else
     if ~any(W); error('W cannot be all zero'); end
     validateattributes(W,{'numeric','gpuArray'},{'finite','nonnegative'},'','W');
 end
+if ~exist('constraint','var') || isempty(constraint)
+    constraint = '';
+else
+    switch constraint
+        case 'phase-constraint';
+        case 'compressed-sensing';
+        case 'parallel-imaging'; if nc==1; error('parallel-imaging requires multiple coils'); end
+        otherwise; error('unknown constraint');
+    end
+    if ~exist('lambda','var') || isempty(lambda)
+        error('lambda must be supplied with %s',constraint);
+    end
+    validateattributes(lambda,{'numeric'},{'scalar','finite','nonnegative'},'','lambda');
+end
 
-% damp, weighting and lambda require iterative recon
+% damp, weighting and constraints require iterative recon
 if damp~=0 && maxit<=1
     warning('damp is only effective when maxit>1 - try 10');
 end
 if ~isscalar(W) && maxit<=1
     warning('weighting is only effective when maxit>1 - try 10');
 end
-if lambda~=0 && maxit<=1
+if ~isempty(constraint) && maxit<=1
     warning('phase constraint is only effective when maxit>1 - try 10');
 end
 
 %% finalize setup
-fprintf('  maxit=%i damp=%.2f lambda=%.2f',maxit,damp,lambda);
-fprintf(' pruno=%.1f weighted=%i\n',pruno,~isscalar(W));
+fprintf('  maxit=%i damp=%.3f weighted=%i',maxit,damp,~isscalar(W));
+if isempty(constraint)
+    fprintf('\n')
+else
+    fprintf(' (%s lambda=%.3f)\n',constraint,lambda);
+end
 
 % send to gpu if needed
 if obj.gpu
@@ -105,10 +118,13 @@ tic;
 
 if maxit==0
     
-    % regridding
+    % regridding x = A'Db
     x = obj.aNUFT(obj.d.*raw);
     
 else
+    
+    % linear operator (A'WDA)
+    A = @(x)obj.iprojection(x,damp,W);
     
     % rhs vector b = (A'WDb)
     b = obj.aNUFT((W.*obj.d).*raw);
@@ -116,20 +132,83 @@ else
     % correct shape for solver
     b = reshape(b,prod(obj.N),nc);
     
-    % least squares (A'WDA)(x) = (A'WDb) + penalty on ||x||
-    [x,~,relres,iter] = pcgpc(@(x)obj.iprojection(x,damp,W),b,[],maxit);
+    % solve (A'WDA)(x) = (A'WDb) + penalty on ||x||
+    [x,~,relres,iter] = pcgpc(A,b,[],maxit);
     
 end
 
-% pruno (slow!)
-if pruno
+%% experimental options
+
+% phase constrained least squares
+if isequal(constraint,'phase-constraint')
+    
+    % smoothing kernel (in image space)
+    h = exp(-(-obj.low:obj.low).^2/obj.low);
+    
+    % use regridding solution for phase
+    P = reshape(x,obj.N(1),obj.N(2),obj.N(3),nc);
+    P = circshift(P,fix(obj.N/2)); % mitigate edge effects (or use cconvn)
+    P = convn(P,reshape(h,numel(h),1,1),'same');
+    P = convn(P,reshape(h,1,numel(h),1),'same');
+    P = convn(P,reshape(h,1,1,numel(h)),'same');
+    P = circshift(P,-fix(obj.N/2)); % shift back again
+    P = exp(i*angle(P));
+    
+    % linear operator (P'A'WDAP)
+    A = @(x)obj.pprojection(x,damp,lambda,W,P);
+    
+    % rhs vector b = (P'A'WDb)
+    b = conj(P).*obj.aNUFT((W.*obj.d).*raw);
+    
+    % correct shape for solver
+    P = reshape(P,prod(obj.N),nc);
+    b = reshape(b,prod(obj.N),nc);
+    
+    % solve (P'A'WDAP)(P'x) = (P'A'WDb) + penalty on imag(P'x)
+    [x,~,relres,iter] = pcgpc(A,b,[],maxit);
+    
+    % put back the low resolution phase
+    x = P.*x;
+    
+end
+
+% compressed sensing (wavelet)
+if isequal(constraint,'compressed-sensing')
+
+    % regularization parameter (needs to be scaled relative to the data)
+    noise = median(abs(real(raw(:))-median(real(raw(:))))) * 1.4826 * sqrt(2);
+ 
+    % wrapper to dwt/idwt (db1, db2, sym3, etc)
+    Q = DWT(obj.N,'sym3'); % must be orthogonal
+    
+    % rhs vector b = (Q'A'WDb)
+    b = Q'*obj.aNUFT((W.*obj.d).*raw);
+    
+    % correct shape for solver
+    b = reshape(b,[],1);
+    
+    % linear operator (Q'A'WDAQ)
+    A = @(q)reshape(Q'*obj.iprojection(Q*q,damp,W),[],1);
+
+    % solve (Q'A'WDAQ)(q) = (QA'WDb) + penalty on ||q||_1 
+    q = pcgL1(A,b,lambda*noise);
+
+    % since q = Q' * x <=> x = Q * q
+    x = Q * q;
+
+    fprintf('  sparsity = %.1f%%\n',100*nnz(q)/numel(q));
+
+end
+
+% parallel imaging (pruno low rank)
+if isequal(constraint,'parallel-imaging')
     
     % use regridding solution for calibration
     x = reshape(x,obj.N(1),obj.N(2),obj.N(3),nc);
     x = fft(fft(fft(x,[],1),[],2),[],3); % kspace
     
     % make the nulling kernels
-    obj.fnull = obj.pruno(x) * pruno;
+    obj.fnull = obj.pruno(x) * lambda;
     obj.anull = conj(obj.fnull);
 
     % correct RHS for solver 
@@ -154,44 +233,10 @@ if pruno
         keyboard
     end
     
-    
-    
-    
-    % least squares (A'WA)(x) = (A'Wb) + penalty on ||null*x||   
+    % least squares (A'WA)(x) = (A'Wb) + penalty on ||null*x||
     iters = 100; % need about 100
     [x,~,~,~,resvec] = pcgpc(@(x)obj.iprojection(x,damp,W),b,[],iters,M);
 
-end
-
-% phase constrained
-if lambda
-    
-    % smoothing kernel (in image space)
-    h = exp(-(-obj.low:obj.low).^2/obj.low);
-    
-    % use regridding solution for phase
-    P = reshape(x,obj.N(1),obj.N(2),obj.N(3),nc);
-    P = circshift(P,fix(obj.N/2)); % mitigate edge effects (or use cconvn)
-    P = convn(P,reshape(h,numel(h),1,1),'same');
-    P = convn(P,reshape(h,1,numel(h),1),'same');
-    P = convn(P,reshape(h,1,1,numel(h)),'same');
-    P = circshift(P,-fix(obj.N/2)); % shift back again
-    P = exp(i*angle(P));
-    
-    % rhs vector b = (P'A'WDb)
-    b = conj(P).*obj.aNUFT((W.*obj.d).*raw);
-    
-    % correct shape for solver
-    P = reshape(P,prod(obj.N),nc);
-    b = reshape(b,prod(obj.N),nc);
-    
-    % phase constrained (P'A'WDAP)(P'x) = (P'A'WDb) + penalty on imag(P'x)
-    % (REF: Bydder & Robson, Magnetic Resonance in Medicine 2005;53:1393)
-    [x,~,relres,iter] = pcgpc(@(x)obj.pprojection(x,damp,lambda,W,P),b,[],maxit);
-    
-    % put back the low resolution phase
-    x = P.*x;
-    
 end
 
 % reshape into image format
