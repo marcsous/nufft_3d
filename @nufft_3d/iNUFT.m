@@ -178,23 +178,23 @@ if isequal(constraint,'compressed-sensing')
     % regularization parameter (needs to be scaled relative to the data)
     noise = median(abs(real(raw(:))-median(real(raw(:))))) * 1.4826 * sqrt(2);
  
-    % wrapper to dwt/idwt (db1, db2, sym3, etc)
-    Q = DWT(obj.N,'sym3'); % must be orthogonal
+    % wrapper to dwt/idwt (db2, sym3, etc., any orthogonal choice)
+    Q = DWT(obj.N,'sym3'); % Q=forward Q'=inverse
     
-    % rhs vector b = (Q'A'WDb)
-    b = Q'*obj.aNUFT((W.*obj.d).*raw);
+    % rhs vector b = (QA'WDb)
+    b = Q*obj.aNUFT((W.*obj.d).*raw);
     
     % correct shape for solver
     b = reshape(b,[],1);
     
-    % linear operator (Q'A'WDAQ)
-    A = @(q)reshape(Q'*obj.iprojection(Q*q,damp,W),[],1);
+    % linear operator (QA'WDAQ')
+    A = @(q)reshape(Q*obj.iprojection(Q'*q,damp,W),[],1);
 
-    % solve (Q'A'WDAQ)(q) = (QA'WDb) + penalty on ||q||_1 
-    q = pcgL1(A,b,lambda*noise);
+    % solve (QA'WDAQ')(q) = (QA'WDb) + penalty on ||q||_1 
+    q = obj.pcgL1(A,b,lambda*noise);
 
-    % since q = Q' * x <=> x = Q * q
-    x = Q * q;
+    % q in wavelet domain so x = Q' * q
+    x = Q' * q;
 
     fprintf('  sparsity = %.1f%%\n',100*nnz(q)/numel(q));
 
