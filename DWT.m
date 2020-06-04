@@ -9,11 +9,11 @@ classdef DWT
     %
     % Example
     %   x = rand(1,8);
-    %   W = DWT(size(x));
-    %   y = W * x;
-    %   z = W'* y;
+    %   W = DWT(size(x),'db2');
+    %   y = W * x; % forward
+    %   z = W'* y; % inverse
     %   norm(x-z)
-    %     ans = 5.4349e-12
+    %     ans = 4.2819e-13
    
     properties (SetAccess = private)
         sizeINI
@@ -90,7 +90,7 @@ classdef DWT
                 % need correct shape
                 x = reshape(x,[obj.sizeINI 1]);
                 
-                if obj.trans==1
+                if obj.trans==0
                     
                     % forward transform
                     if isvector(x)
