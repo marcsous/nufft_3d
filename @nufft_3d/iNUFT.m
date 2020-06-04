@@ -133,7 +133,7 @@ else
     b = reshape(b,prod(obj.N),nc);
     
     % solve (A'WDA)(x) = (A'WDb) + penalty on ||x||
-    [x,~,relres,iter] = pcgpc(A,b,[],maxit);
+    [x,~,relres,iter] = obj.pcgpc(A,b,[],maxit);
     
 end
 
@@ -165,7 +165,7 @@ if isequal(constraint,'phase-constraint')
     b = reshape(b,prod(obj.N),nc);
     
     % solve (P'A'WDAP)(P'x) = (P'A'WDb) + penalty on imag(P'x)
-    [x,~,relres,iter] = pcgpc(A,b,[],maxit);
+    [x,~,relres,iter] = obj.pcgpc(A,b,[],maxit);
     
     % put back the low resolution phase
     x = P.*x;
@@ -235,7 +235,7 @@ if isequal(constraint,'parallel-imaging')
     
     % least squares (A'WA)(x) = (A'Wb) + penalty on ||null*x||
     iters = 100; % need about 100
-    [x,~,~,~,resvec] = pcgpc(@(x)obj.iprojection(x,damp,W),b,[],iters,M);
+    [x,~,~,~,resvec] = obj.pcgpc(@(x)obj.iprojection(x,damp,W),b,[],iters,M);
 
 end
 
