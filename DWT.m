@@ -32,7 +32,7 @@ classdef DWT
                 error('sizeINI is required');
             end
             if nargin<2
-                wname = 'sym3'; % orthogonal
+                wname = 'db2'; % orthogonal
             end
             if nargin<3
                 mode = 'per'; % periodic
