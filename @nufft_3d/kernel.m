@@ -16,7 +16,7 @@ function ans = bessi0(ax)
 ans = zeros(size(ax),'like',ax);
 
 % ax<3.75
-k=real(ax)<3.75;
+k=abs(ax)<3.75;
 y=ax(k)./3.75;
 y=y.^2;
 ans(k)=1.0+y.*(3.5156229+y.*(3.0899424+y.*(1.2067492+...
