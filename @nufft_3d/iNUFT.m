@@ -2,18 +2,21 @@
 function im = iNUFT(obj,raw,maxit,damp,W,constraint,lambda)
 %im = iNUFT(obj,raw,maxit,damp,W,constraint,lambda)
 %
-% -raw = complex raw kspace data [nr nc] or [nr ny nc]
-% -maxit [scalar] = no. iterations (use 0 or 1 for regridding)
-% -damp [scalar] = Tikhonov regularization (only when maxit>1)
-% -W [scalar, ny or nr*ny] = weighting (only when maxit>1)
+% -raw: complex raw kspace data [nr nc] or [nr ny nc]
+% -maxit [scalar]: no. iterations (use 0 or 1 for regridding)
+% -damp [scalar]: Tikhonov regularization (only when maxit>1)
+% -W [scalar, ny or nr*ny]: weighting (only when maxit>1)
 %
-% Experimental (only when maxit>1)
-% -constraint = 'phase-constraint','compressed-sensing','parallel-imaging'
-% -lambda [scalar] = regularization parameter (suggested: 0.5, 1e-3, 0.5)
+% Experimental
+% -constraint: 'phase-constraint'
+%              'compressed-sensing'
+%              'parallel-imaging-sake'
+%              'parallel-imaging-pruno'
+% -lambda [scalar]: regularization parameter (e.g. 0.5, 1e-3, 0, 0.5)
 %
 % The constraints can often produce slightly better images but require
 % tweaking of lambda. They are implemented as mutually exclusive options
-% for evaluation but actually they can be used simultaneously at great
+% for evaluation but actually they could be used simultaneously at great
 % computational cost and probably marginal benefit.
 %
 %% argument checks
@@ -72,7 +75,8 @@ else
     switch constraint
         case 'phase-constraint';
         case 'compressed-sensing';
-        case 'parallel-imaging'; if nc==1; error('parallel-imaging requires multiple coils'); end
+        case 'parallel-imaging-sake'; if nc==1; error('sake-low-rank requires multiple coils'); end    
+        case 'parallel-imaging-pruno'; if nc==1; error('parallel-imaging requires multiple coils'); end            
         otherwise; error('unknown constraint');
     end
     if ~exist('lambda','var') || isempty(lambda)
@@ -103,10 +107,7 @@ end
 % send to gpu if needed
 if obj.gpu
     W = gpuArray(W);
-    damp = gpuArray(damp);
-    lambda = gpuArray(lambda);
-
-    raw = single(raw);
+    raw = gpuArray(single(raw));
     im = zeros(obj.N(1),obj.N(2),obj.N(3),nc,'single');
 else
     raw = double(raw);
@@ -178,8 +179,8 @@ if isequal(constraint,'compressed-sensing')
     % regularization parameter (needs to be scaled relative to the data)
     noise = median(abs(real(raw(:))-median(real(raw(:))))) * 1.4826 * sqrt(2);
  
-    % wrapper to dwt/idwt (db2, sym3, etc., any orthogonal choice)
-    Q = DWT(obj.N,'sym3'); % Q=forward Q'=inverse
+    % wrapper to dwt/idwt (any orthogonal choice)
+    Q = DWT(obj.N,'db2'); % Q=forward Q'=inverse
     
     % rhs vector b = (QA'WDb)
     b = Q*obj.aNUFT((W.*obj.d).*raw);
@@ -200,8 +201,16 @@ if isequal(constraint,'compressed-sensing')
 
 end
 
+% parallel imaging (sake low rank)
+if isequal(constraint,'parallel-imaging-sake')
+    
+    % use lambda as a flag for loraks
+    x = obj.sake(raw,'damp',damp,'W',W,'loraks',lambda~=0);
+    
+end
+
 % parallel imaging (pruno low rank)
-if isequal(constraint,'parallel-imaging')
+if isequal(constraint,'parallel-imaging-pruno')
     
     % use regridding solution for calibration
     x = reshape(x,obj.N(1),obj.N(2),obj.N(3),nc);
@@ -235,7 +244,7 @@ if isequal(constraint,'parallel-imaging')
     
     % least squares (A'WA)(x) = (A'Wb) + penalty on ||null*x||
     iters = 100; % need about 100
-    [x,~,~,~,resvec] = obj.pcgpc(@(x)obj.iprojection(x,damp,W),b,[],iters,M);
+    x = obj.pcgpc(@(x)obj.iprojection(x,damp,W),b,[],iters,M);
 
 end
 

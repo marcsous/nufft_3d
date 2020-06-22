@@ -78,6 +78,10 @@ for k = 1:opts.maxit
     x_hat = opts.alpha*x + (1 - opts.alpha)*zold;
     z = shrinkage(x_hat + u, lambda/opts.rho);
 
+    if ~any(z(:))
+        error('Too sparse (all zero), reduce lambda.');
+    end
+    
     u = u + (x_hat - z);
 
     % check convergence

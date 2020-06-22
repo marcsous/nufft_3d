@@ -32,7 +32,7 @@ classdef nufft_3d
     % behind the scenes parameters
     properties (SetAccess = private, Hidden = true)
 
-        gpu(1,1) logical      = 0  % use gpu (gpuSparse) if present (1=yes 0=no)
+        gpu(1,1) logical      = 1  % use gpu (gpuSparse) if present (1=yes 0=no)
         low(1,1) double       = 5  % lowpass filter: h = exp(-(-low:low).^2/low)
         K(3,1) double = zeros(3,1) % oversampled image dimensions   
         d(:,1)                     % density weighting vector           
@@ -152,16 +152,25 @@ classdef nufft_3d
             obj.HT = sparse(ncol,nrow);
             
             % push to gpu (try/catch fallback to cpu)
-            if obj.gpu && exist('gpuArray','class')
+            if obj.gpu
                 try
-                    obj.H  = gpuSparse(obj.H);
-                    obj.HT = gpuSparse(obj.HT);
-                catch
                     obj.H  = gpuArray(obj.H);
                     obj.HT = gpuArray(obj.HT);
+                catch
+                    obj.gpu = 0;
+                    warning('GPU device error, fallback to CPU.');
                 end
-            else
-                obj.gpu = 0;
+                if obj.gpu
+                    try
+                        obj.H  = gpuSparse(obj.H);
+                        obj.HT = gpuSparse(obj.HT);
+                    catch
+                        warning('gpuSparse not found, fallback to gpuArray.');
+                    end
+                    kx = gpuArray(kx);
+                    ky = gpuArray(ky);
+                    kz = gpuArray(kz);
+                end
             end
             
             %% calculate indices and convolution coefficients
