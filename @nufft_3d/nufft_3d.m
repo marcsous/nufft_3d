@@ -3,7 +3,9 @@ classdef nufft_3d
     % Non-uniform 3D fourier transform (based on Fessler NUFFT).
     % Note: trajectory units are phase cycles/fov which means the
     % Nyquist distance is 1 unit (Fessler's om is in radians/fov).
-    % If available, code uses gpu sparse or gpuSparse matrices.
+    %
+    % If available, code uses sparse on the GPU (double precision)
+    % or the gpuSparse class (single precision).
     %
     % Inputs:
     %  om = trajectory centered at 0 (unit = cycles/fov) [3 npts]
@@ -31,23 +33,21 @@ classdef nufft_3d
     
     % behind the scenes parameters
     properties (SetAccess = private, Hidden = true)
-
-        gpu(1,1) logical      = 1  % use gpu (gpuSparse) if present (1=yes 0=no)
+        gpu(1,1) logical      = 1  % use the gpu if available (1=yes 0=no)
         low(1,1) double       = 5  % lowpass filter: h = exp(-(-low:low).^2/low)
         K(3,1) double = zeros(3,1) % oversampled image dimensions   
-        d(:,1)                     % density weighting vector           
+        d(:,1)                     % density weighting vector 
         H(:,:)                     % sparse interpolation matrix
-        HT(:,:)                    % transpose of H (faster if stored separately)
+        HT(:,:)                    % transpose of H (stored separately on CPU)        
         U(:,:,:)                   % deapodization matrix
-     
     end
 
-    % experimental thing
+    % experimental parameters
     properties (SetAccess = private, Hidden = true)
         sd                         % the mean sample density in kspace
         dwsd                       % the mean density weighed sample density
         fnull                      % forward nullspace for pruno
-        anull                      % adjunct nullspace for pruno   
+        anull                      % adjunct nullspace for pruno
     end
     
     methods
@@ -137,17 +137,19 @@ classdef nufft_3d
             % no. rows
             nrow = numel(ok);
             
-            % interpolation matrix: because H and H' have wildly
-            % different performance, store them both and always
-            % use the fastest operation. Cost = 2x memory.
+            % interpolation matrix: because H*x and H'*b are wildly
+            % different in performance, store both matrices and use
+            % the fastest operation. Cost = 2x memory.
+            % UPDATE: since CUDA-11 this is no longer true for GPU
+            % 
+            % on GPU
+            %  -H is faster to create due to sorted rows
+            %  -H is faster to transpose multiply (HT*y >> H'*y)
             %
             % on CPU
-            %  -transpose is faster to create due to sorted columns
-            %  -transpose is faster to multiply (H'*y >> HT*y)
-            % on GPU
-            %  -non-transpose is faster to create due to sorted rows
-            %  -non-tranpose is faster to multiply (HT*y >> H'*y)
-            
+            %  -HT is faster to create due to sorted columns
+            %  -HT is faster to transpose multiply (H'*y >> HT*y)
+
             obj.H  = sparse(nrow,ncol);
             obj.HT = sparse(ncol,nrow);
             
@@ -155,17 +157,15 @@ classdef nufft_3d
             if obj.gpu
                 try
                     obj.H  = gpuArray(obj.H);
-                    obj.HT = gpuArray(obj.HT);
-                catch
+                catch ME
                     obj.gpu = 0;
-                    warning('GPU device error, fallback to CPU.');
+                    warning('GPU device error, fallback to CPU (%s).',ME.message);
                 end
                 if obj.gpu
                     try
                         obj.H  = gpuSparse(obj.H);
-                        obj.HT = gpuSparse(obj.HT);
-                    catch
-                        warning('gpuSparse not found, fallback to gpuArray.');
+                    catch ME
+                        warning('gpuSparse not found, fallback to gpuArray (%s).',ME.message);
                     end
                     kx = gpuArray(kx);
                     ky = gpuArray(ky);
@@ -233,20 +233,14 @@ classdef nufft_3d
 
             %% final steps
 
-            % transpose of H or HT           
+            % transpose needed for CPU         
             if obj.gpu
-                try
-                    obj.HT = full_ctranspose(obj.H);
-                catch ME % out of memory?
-                    obj.HT = obj.H'; % lazy transpose
-                end
+                obj.HT = obj.H'; % only use lazy transpose since CUDA-11
+                wait(gpuDevice); % try to prevent memory fragmentation on GPU
             else
                 obj.H = obj.HT';
             end
-            
-            % check for boo boos
-            if nnz(obj.H>1); error('invalid value(s) in H'); end
-            
+
             % deapodization matrix
             obj.U = obj.deap();
             

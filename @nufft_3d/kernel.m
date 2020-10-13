@@ -3,12 +3,12 @@ function s = kernel(obj,dist2)
 
 arg = obj.alpha*sqrt(1-dist2/(obj.J/2).^2);
 
-% MATLAB builtin doesn't accept gpuArray
+% MATLAB's builtin doesn't accept gpuArray
 %s = besseli(0,arg) / besseli(0,obj.alpha);
 
 s = bessi0(arg) / bessi0(obj.alpha);
 
-s = real(s); % remove any trace imag component
+s = real(s); % remove trace imag component
 
 %% substitute for matlab besseli function (Numerical Recipes in C)
 function ans = bessi0(ax)
