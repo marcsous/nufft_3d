@@ -143,24 +143,17 @@ classdef DWT
 
             y = obj * x;
 
-            % re/im and coil independent
+            % no. coils
             nc = numel(x) / prod(obj.sizeINI);
             
+            % coils separate
             y = reshape(y,[],nc);
             
-            if ~isreal(x)
-                y = [real(y); imag(y)];
-            end
-            
-            [~,ok] = sort(abs(y),'ascend');
-            
+            % truncate based on abs
+            [~,ok] = sort(abs(y),'descend');
             for c = 1:nc
-                y(ok(1:ceil(size(ok,1)*(1-sparsity)),c),c) = 0;
-            end
-            
-            if ~isreal(x)
-                y = reshape(y,[],2,nc);
-                y = complex(y(:,1,:),y(:,2,:));
+                k = floor(size(y,1)*sparsity);
+                y(ok(end-k:end,c),c) = 0;
             end
 
             y = obj' * y;
