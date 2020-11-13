@@ -170,6 +170,7 @@ classdef nufft_3d
                     kx = gpuArray(kx);
                     ky = gpuArray(ky);
                     kz = gpuArray(kz);
+                    ok = gpuArray(ok);
                 end
             end
             
