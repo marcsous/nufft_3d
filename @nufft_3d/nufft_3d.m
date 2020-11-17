@@ -171,9 +171,9 @@ classdef nufft_3d
                         z = round(kz) + iz;
 
                         % distance (squared) from the samples
-                        dx2 = (x-kx).^2;
-                        dy2 = (y-ky).^2;
-                        dz2 = (z-kz).^2;
+                        dx2 = single(x-kx).^2;
+                        dy2 = single(y-ky).^2;
+                        dz2 = single(z-kz).^2;
                         dist2 = dx2 + dy2 + dz2;
                         
                         % wrap negatives (kspace centered at 0)
@@ -193,7 +193,6 @@ classdef nufft_3d
                         end
 
                         % store indices for sparse call
-                        if obj.gpu && exist('gpuSparse','class'); s = single(s); end                       
                         if ~verLessThan('matlab','9.8'); i = int32(i); end
                         if ~verLessThan('matlab','9.8'); j = int32(j); end
                         I = cat(2,I,i); J = cat(2,J,j); S = cat(2,S,s);
@@ -202,26 +201,36 @@ classdef nufft_3d
                 end
             end
 
-            % create sparse matrix
-            if obj.gpu==0
-                obj.HT = sparse(J,I,S,ncol,nrow); % slightly faster to create transpose
-                obj.H = obj.HT'; % store H and HT separately (assuming plenty of RAM)
-            else
+             % clear large temporaries 
+            clearvars i j s dist2 dx2 dy2 dz2 kx ky kz x y z
+
+            % create matrix - fall through failures (e.g. out of GPU memory)
+            if obj.gpu
                 try
                     obj.H = gpuSparse(I,J,S,nrow,ncol);
                 catch ME
-                    S = double(S);
-                    obj.H = sparse(I,J,S,nrow,ncol);
-                    warning('gpuSparse error, fallback to GPU (%s).',ME.message);
+                    warning('gpuSparse error, fallback to sparse (%s).',ME.message);
+                    try
+                        S = double(S);
+                        obj.H = sparse(I,J,S,nrow,ncol);
+                    catch
+                        obj.gpu = 0;
+                        warning('GPU error, fallback to CPU (%s).',ME.message);
+                    end
                 end
             end
+            if obj.gpu==0
+                I = gather(I); J = gather(I); S = gather(double(S));
+                obj.HT = sparse(J,I,S,ncol,nrow); % seems faster to create transpose
+                obj.H = obj.HT'; % store H and HT separately (assumes plenty of RAM)
+            end    
             fprintf(' Created %s matrix. ',class(obj.H)); toc(t);
 
-            %% final steps
-
              % clear large temporaries 
-            clearvars -except om obj ok           
-
+            clearvars -except om obj ok
+            
+            %% final steps
+   
             % deapodization matrix
             obj.U = obj.deap();
             
