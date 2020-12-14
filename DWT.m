@@ -10,12 +10,12 @@ classdef DWT
     % -lax about input shape (vectorized ok) for pcg
     %
     % Example
-    %   x = rand(1,8);
+    %   x = rand(1,8,'single');
     %   W = DWT(size(x),'db2');
     %   y = W * x; % forward
     %   z = W'* y; % inverse
     %   norm(x-z)
-    %     ans = 4.2819e-13
+    %     ans = 1.0431e-07
    
     properties (SetAccess = private)
         sizeINI
@@ -36,7 +36,6 @@ classdef DWT
             if nargin<2
                 wname = 'db2'; % orthogonal
             end
-
             if ~isnumeric(sizeINI) || ~isvector(sizeINI)
                 error('sizeINI must be the output of size()');
             end
@@ -64,13 +63,25 @@ classdef DWT
         %% y = W*x or y = W'*x
         function y = mtimes(obj,x)
             
-            % allow looping over coil dimension
+            % number of coils
             nc = numel(x) / prod(obj.sizeINI);
-            
             if mod(nc,1)
                 error('size(x) not compatible with sizeINI [%s]',num2str(obj.sizeINI));
             end
 
+            % make it respect class
+            LoD = obj.filters.LoD;
+            HiD = obj.filters.HiD;
+            LoR = obj.filters.LoR;
+            HiR = obj.filters.HiR;
+            if isa(x,'single') || (isa(x,'gpuArray') && isequal(classUnderlying(x),'single'))
+                LoD = single(LoD);
+                HiD = single(HiD);
+                LoR = single(LoR);
+                HiR = single(HiR);
+            end
+            
+            % allow looping over coil dimension            
             if nc>1
                 
                 y = reshape(x,prod(obj.sizeINI),nc);
@@ -90,13 +101,13 @@ classdef DWT
                     
                     % forward transform
                     if isvector(x)
-                        [CA CD] = dwt(x,obj.filters.LoD,obj.filters.HiD,'mode',obj.mode);
+                        [CA CD] = dwt(x,LoD,HiD,'mode',obj.mode);
                         if isrow(x); y = [CA CD]; else; y = [CA;CD]; end
                     elseif ndims(x)==2
-                        [CA CH CV CD] = dwt2(x,obj.filters.LoD,obj.filters.HiD,'mode',obj.mode);
+                        [CA CH CV CD] = dwt2(x,LoD,HiD,'mode',obj.mode);
                         y = [CA CV; CH CD];
                     elseif ndims(x)==3
-                        wt = dwt3(x,{obj.filters.LoD,obj.filters.HiD,obj.filters.LoR,obj.filters.HiR},'mode',obj.mode);
+                        wt = dwt3(x,{LoD,HiD,LoR,HiR},'mode',obj.mode);
                         y = cell2mat(wt.dec);
                     else
                         error('only 1d, 2d or 3d supported');
@@ -111,16 +122,16 @@ classdef DWT
                         else
                             C = mat2cell(x,[obj.sizeINI(1)/2 obj.sizeINI(1)/2],1);
                         end
-                        y = idwt(C{1},C{2},obj.filters.LoR,obj.filters.HiR,'mode',obj.mode);
+                        y = idwt(C{1},C{2},LoR,HiR,'mode',obj.mode);
                     elseif ndims(x)==2
                         C = mat2cell(x,[obj.sizeINI(1)/2 obj.sizeINI(1)/2],[obj.sizeINI(2)/2 obj.sizeINI(2)/2]);
-                        y = idwt2(C{1},C{2},C{3},C{4},obj.filters.LoR,obj.filters.HiR,'mode',obj.mode);
+                        y = idwt2(C{1},C{2},C{3},C{4},LoR,HiR,'mode',obj.mode);
                     elseif ndims(x)==3
                         wt.sizeINI = obj.sizeINI;
-                        wt.filters.LoD = {obj.filters.LoD,obj.filters.LoD,obj.filters.LoD};
-                        wt.filters.HiD = {obj.filters.HiD,obj.filters.HiD,obj.filters.HiD};
-                        wt.filters.LoR = {obj.filters.LoR,obj.filters.LoR,obj.filters.LoR};
-                        wt.filters.HiR = {obj.filters.HiR,obj.filters.HiR,obj.filters.HiR};
+                        wt.filters.LoD = {LoD,LoD,LoD};
+                        wt.filters.HiD = {HiD,HiD,HiD};
+                        wt.filters.LoR = {LoR,LoR,LoR};
+                        wt.filters.HiR = {HiR,HiR,HiR};
                         wt.mode = obj.mode;
                         wt.dec = mat2cell(x,[obj.sizeINI(1)/2 obj.sizeINI(2)/2],[obj.sizeINI(2)/2 obj.sizeINI(2)/2],[obj.sizeINI(3)/2 obj.sizeINI(3)/2]);
                         y = idwt3(wt);
