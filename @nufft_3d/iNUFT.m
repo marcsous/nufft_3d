@@ -75,7 +75,6 @@ else
     switch constraint
         case 'phase-constraint';
         case 'compressed-sensing';
-        case 'compressed-sensing-pc';          
         case 'parallel-imaging-sake'; if nc==1; error('sake-low-rank requires multiple coils'); end    
         case 'parallel-imaging-pruno'; if nc==1; error('parallel-imaging requires multiple coils'); end            
         otherwise; error('unknown constraint');
@@ -141,23 +140,20 @@ end
 
 %% experimental options
 
-% smoothing kernel (in image space)
-h = exp(-(-obj.low:obj.low).^2/obj.low);
-
-% low resolutuion phase
-P = reshape(x,obj.N(1),obj.N(2),obj.N(3),nc);
-P = circshift(P,fix(obj.N/2)); % mitigate edge effects (or use cconvn)
-P = convn(P,reshape(h,numel(h),1,1),'same');
-P = convn(P,reshape(h,1,numel(h),1),'same');
-P = convn(P,reshape(h,1,1,numel(h)),'same');
-P = circshift(P,-fix(obj.N/2)); % shift back again
-P = exp(i*angle(P));
-
-% wrapper to dwt/idwt (any orthogonal choice)
-Q = DWT(obj.N,'db2'); % Q=forward Q'=inverse
-
 % phase constrained least squares
 if isequal(constraint,'phase-constraint')
+    
+    % smoothing kernel (in image space)
+    h = exp(-(-obj.low:obj.low).^2/obj.low);
+    
+    % use regridding solution for phase
+    P = reshape(x,obj.N(1),obj.N(2),obj.N(3),nc);
+    P = circshift(P,fix(obj.N/2)); % mitigate edge effects (or use cconvn)
+    P = convn(P,reshape(h,numel(h),1,1),'same');
+    P = convn(P,reshape(h,1,numel(h),1),'same');
+    P = convn(P,reshape(h,1,1,numel(h)),'same');
+    P = circshift(P,-fix(obj.N/2)); % shift back again
+    P = exp(i*angle(P));
     
     % linear operator (P'A'WDAP)
     A = @(x)obj.pprojection(x,damp,lambda,W,P);
@@ -177,51 +173,27 @@ if isequal(constraint,'phase-constraint')
     
 end
 
-% compressed sensing
+% compressed sensing (wavelet)
 if isequal(constraint,'compressed-sensing')
-    
-    % linear operator (QA'WDAQ')
-    A = @(q)reshape(Q*obj.iprojection(Q'*q,damp,W),[],1);
+
+    % wrapper to dwt/idwt (any orthogonal choice)
+    Q = DWT(obj.N,'db2'); % Q=forward Q'=inverse
     
     % rhs vector b = (QA'WDb)
     b = Q*obj.aNUFT((W.*obj.d).*raw);
     
     % correct shape for solver
     b = reshape(b,[],1);
+    
+    % linear operator (QA'WDAQ')
+    A = @(q)reshape(Q*obj.iprojection(Q'*q,damp,W),[],1);
 
     % solve (QA'WDAQ')(q) = (QA'WDb) + penalty on ||q||_1 
-    q = pcgL1(A,b,lambda^2);
+    q = pcgL1(A,b,lambda);
 
     % q in wavelet domain so x = Q' * q
     x = Q' * q;
 
-    fprintf('  nonzeros = %.1f%% (lambda=%.2e)\n',100*nnz(q)/numel(q),lambda);
-
-end
-
-% phase constrained compressed sensing
-if isequal(constraint,'compressed-sensing-pc')
-
-    % linear operator (QP'A'WDAPQ') [set phase_constraint=1]
-    A = @(q)reshape(Q*obj.pprojection(Q'*q,damp,1,W,P),[],1);
-    
-    % rhs vector b = (QA'WDb)
-    b = Q*(conj(P).*obj.aNUFT((W.*obj.d).*raw));
-    
-    % correct shape for solver
-    b = reshape(b,[],1);
-
-    % solve (QA'WDAQ')(q) = (QA'WDb) + penalty on ||q||_1 
-    q = pcgL1(A,b,lambda^2);
-
-    % q in wavelet domain so x = Q' * q
-    x = Q' * q;
-
-    % put back the low resolution phase
-    x = P.*x;
-    
-    fprintf('  nonzeros = %.1f%% (lambda=%.2e)\n',100*nnz(q)/numel(q),lambda*noise); 
-    
 end
 
 % parallel imaging (sake low rank)

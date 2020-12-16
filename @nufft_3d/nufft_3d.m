@@ -4,8 +4,8 @@ classdef nufft_3d
     % Note: trajectory units are phase cycles/fov which means the
     % Nyquist distance is 1 unit (Fessler's om is in radians/fov).
     %
-    % If available, code uses sparse on the GPU (double precision)
-    % or the gpuSparse class (single precision).
+    % If available, code uses gpuSparse class (single precision)
+    % or sparse on the GPU (double precision).
     %
     % Inputs:
     %  om = trajectory centered at 0 (unit = cycles/fov) [3 npts]
@@ -33,7 +33,7 @@ classdef nufft_3d
     
     % behind the scenes parameters
     properties (SetAccess = private, Hidden = true)
-        gpu(1,1) logical      = 1  % use the gpu if available (1=yes 0=no)
+        gpu(1,1) logical      = 1  % use gpu/gpuSparse if possible (0=no 1=yes)
         low(1,1) double       = 5  % lowpass filter: h = exp(-(-low:low).^2/low)
         K(3,1) double = zeros(3,1) % oversampled image dimensions   
         d(:,1)                     % density weighting vector 
@@ -130,56 +130,34 @@ classdef nufft_3d
             fprintf('  %i points (out of %i) are out of bounds.\n',sum(~ok),numel(ok))
             
             %% set up interpolation matrix
+
+            t = tic;
             
             % no. columns
             ncol = prod(obj.K);
             
             % no. rows
             nrow = numel(ok);
-            
-            % interpolation matrix: because H*x and H'*b are wildly
-            % different in performance, store both matrices and use
-            % the fastest operation. Cost = 2x memory.
-            % UPDATE: since CUDA-11 this is no longer true for GPU
-            % 
-            % on GPU
-            %  -H is faster to create due to sorted rows
-            %  -H is faster to transpose multiply (HT*y >> H'*y)
-            %
-            % on CPU
-            %  -HT is faster to create due to sorted columns
-            %  -HT is faster to transpose multiply (H'*y >> HT*y)
 
-            obj.H  = sparse(nrow,ncol);
-            obj.HT = sparse(ncol,nrow);
+            % sparse indices
+            I = []; J = []; S = [];
             
-            % push to gpu (try/catch fallback to cpu)
+            % push to gpu (fallback to cpu)
             if obj.gpu
                 try
-                    obj.H  = gpuArray(obj.H);
-                catch ME
-                    obj.gpu = 0;
-                    warning('GPU device error, fallback to CPU (%s).',ME.message);
-                end
-                if obj.gpu
-                    try
-                        obj.H  = gpuSparse(obj.H);
-                    catch ME
-                        warning('gpuSparse not found, fallback to gpuArray (%s).',ME.message);
-                    end
                     kx = gpuArray(kx);
                     ky = gpuArray(ky);
                     kz = gpuArray(kz);
+                    ok = gpuArray(ok);
+                catch ME
+                    obj.gpu = 0;
+                    warning('GPU error, fallback to CPU (%s).',ME.message);
                 end
             end
-            
-            %% calculate indices and convolution coefficients
-            
-            tic; fprintf(' Creating %s matrix H     ',class(obj.H)); count = 1;
-            
+
             % overkill on the range to include endpoints
-            range = -ceil(obj.J/2):ceil(obj.J/2);
-            
+            range = -ceil(obj.J/2):ceil(obj.J/2);           
+
             for ix = range
                 for iy = range
                     for iz = range
@@ -193,9 +171,9 @@ classdef nufft_3d
                         z = round(kz) + iz;
 
                         % distance (squared) from the samples
-                        dx2 = (x-kx).^2;
-                        dy2 = (y-ky).^2;
-                        dz2 = (z-kz).^2;
+                        dx2 = single(x-kx).^2;
+                        dy2 = single(y-ky).^2;
+                        dz2 = single(z-kz).^2;
                         dist2 = dx2 + dy2 + dz2;
                         
                         % wrap negatives (kspace centered at 0)
@@ -203,44 +181,56 @@ classdef nufft_3d
                         y = mod(y,obj.K(2));
                         z = mod(z,obj.K(3));
                         
-                        % sparse matrix indices: use <= to include endpoints
+                        % sparse matrix indices: use <= to include endpoints (higher accuracy)
                         if obj.radial
                             i = find(ok & 4*dist2 <= obj.J^2);
-                            j = 1+x(i)+obj.K(1)*y(i)+obj.K(1)*obj.K(2)*z(i);
+                            j = 1 + x(i) + obj.K(1)*y(i) + obj.K(1)*obj.K(2)*z(i);
                             s = obj.kernel(dist2(i));
                         else
                             i = find(ok & 4*dx2 <= obj.J^2 & 4*dy2 <= obj.J^2 & 4*dz2 <= obj.J^2);
-                            j = 1+x(i)+obj.K(1)*y(i)+obj.K(1)*obj.K(2)*z(i);
+                            j = 1 + x(i) + obj.K(1)*y(i) + obj.K(1)*obj.K(2)*z(i);
                             s = obj.kernel(dx2(i)).*obj.kernel(dy2(i)).*obj.kernel(dz2(i));
                         end
 
-                        % accumulate sparse matrix
-                        if obj.gpu
-                            obj.H = obj.H + gpuSparse(i,j,s,nrow,ncol);
-                        else
-                            obj.HT = obj.HT + sparse(j,i,s,ncol,nrow);
-                        end
-
-                        % display progress
-                        fprintf('\b\b\b\b%-2d%% ',floor(100*count/numel(range)^3)); count = count+1;
+                        % store indices for sparse call
+                        if ~verLessThan('matlab','9.8'); i = int32(i); end
+                        if ~verLessThan('matlab','9.8'); j = int32(j); end
+                        I = cat(2,I,i); J = cat(2,J,j); S = cat(2,S,s);
+                        
                     end
                 end
             end
-            fprintf('\b. '); toc
 
-            % clear memory of large temporaries 
-            clear i j s kx ky kz dist2 dx2 dy2 dz2 x y z
+             % clear large temporaries 
+            clearvars i j s dist2 dx2 dy2 dz2 kx ky kz x y z
 
-            %% final steps
-
-            % transpose needed for CPU         
+            % create matrix - fall through failures (e.g. out of GPU memory)
             if obj.gpu
-                obj.HT = obj.H'; % only use lazy transpose since CUDA-11
-                wait(gpuDevice); % try to prevent memory fragmentation on GPU
-            else
-                obj.H = obj.HT';
+                try
+                    obj.H = gpuSparse(I,J,S,nrow,ncol);
+                catch ME
+                    warning('gpuSparse error, fallback to sparse (%s).',ME.message);
+                    try
+                        S = double(S);
+                        obj.H = sparse(I,J,S,nrow,ncol);
+                    catch
+                        obj.gpu = 0;
+                        warning('GPU error, fallback to CPU (%s).',ME.message);
+                    end
+                end
             end
+            if obj.gpu==0
+                I = gather(I); J = gather(I); S = gather(double(S));
+                obj.HT = sparse(J,I,S,ncol,nrow); % seems faster to create transpose
+                obj.H = obj.HT'; % store H and HT separately (assumes plenty of RAM)
+            end    
+            fprintf(' Created %s matrix. ',class(obj.H)); toc(t);
 
+             % clear large temporaries 
+            clearvars -except om obj ok
+            
+            %% final steps
+   
             % deapodization matrix
             obj.U = obj.deap();
             
@@ -252,11 +242,11 @@ classdef nufft_3d
 
             % display properties
             fprintf(' Created'); disp(obj);
-            fprintf('\n')
-            fprintf('\tH: [%ix%i] (nonzeros %i) %0.1fGbytes\n',size(obj.H),nnz(obj.H),3*nnz(obj.H)*4*(2-obj.gpu)/1e9);
-            fprintf('\tU: [%ix%ix%i] min=%f max=%f\n',size(obj.U,1),size(obj.U,2),size(obj.U,3),min(obj.U(:)),max(obj.U(:)))
-            fprintf('\td: [%ix%i] (zeros %i) min=%f max=%f\n',size(obj.d),nrow-nnz(obj.d),min(nonzeros(obj.d)),max(obj.d))
-            fprintf('\n')
+            fprintf('\n');
+            fprintf('\tH: [%ix%i] (nonzeros %i) %0.1fGbytes\n',size(obj.H),nnz(obj.H),3*nnz(obj.H)*4*(2-isa(obj.H,'gpuSparse'))/1e9);
+            fprintf('\tU: [%ix%ix%i] min=%f max=%f\n',size(obj.U,1),size(obj.U,2),size(obj.U,3),min(obj.U(:)),max(obj.U(:)));
+            fprintf('\td: [%ix%i] (zeros %i) min=%f max=%f\n',size(obj.d),nnz(obj.d==0),min(nonzeros(obj.d)),max(obj.d));
+            fprintf('\n');
   
         end
 
@@ -267,35 +257,35 @@ classdef nufft_3d
         
         % sparse matrix vector multiply
         function y = spmv(obj,k)
-            if obj.gpu
+            if isa(obj.H,'gpuSparse')
                 y = single(k);
-                y = obj.H * y;
             else
                 y = double(k);
-                y = obj.HT' * y;
-                y = full(y);
             end
+            if obj.gpu==0
+                y = obj.HT' * y;
+            else
+                y = obj.H * y;
+            end
+            y = full(y);            
         end
         
         % sparse transpose matrix vector multiply
         function y = spmv_t(obj,k)
-            if obj.gpu
+            if isa(obj.H,'gpuSparse')
                 y = single(k);
-                y = obj.HT * y;
             else
                 y = double(k);
-                y = obj.H' * y;
-                y = full(y);
             end
+            y = obj.H' * y;
+            y = full(y);
         end
         
         % 3d fft with pre-fft padding (cartesian kspace <- cartesian image)
         function k = fft3_pad(obj,x)
             for j = 1:3
                 pad = size(x); pad(j) = (obj.K(j)-obj.N(j)) / 2;
-                if j==1; x = cat(1,zeros(pad),x,zeros(pad)); end
-                if j==2; x = cat(2,zeros(pad),x,zeros(pad)); end
-                if j==3; x = cat(3,zeros(pad),x,zeros(pad)); end
+                x = cat(j,zeros(pad,'like',x),x,zeros(pad,'like',x));
                 %if pad(j)>0
                 %    % in the padded matrix, should the end-points should share the energy?
                 %    if j==1; x(end-pad(j)+1,:,:,:) = x(end-pad(j)+1,:,:,:)/2; x(pad(j),:,:,:) = x(end-pad(j)+1,:,:,:); end
@@ -310,13 +300,13 @@ classdef nufft_3d
         %% 3d ifft with post-ifft cropping (cartesian image <- cartesian kspace)
         function x = ifft3_crop(obj,k)
             for j = 1:3
-                crop = (obj.K(j)-obj.N(j)) / 2;
+                mid = (obj.K(j)-obj.N(j)) / 2;
                 k = ifftshift(ifft(k,[],j),j); 
-                if j==1; k = k(1+crop:end-crop,:,:,:); end
-                if j==2; k = k(:,1+crop:end-crop,:,:); end
-                if j==3; k = k(:,:,1+crop:end-crop,:); end
+                if j==1; k = k(1+mid:end-mid,:,:,:); end
+                if j==2; k = k(:,1+mid:end-mid,:,:); end
+                if j==3; k = k(:,:,1+mid:end-mid,:); end
             end
-            x = k * prod(obj.K) / prod(obj.N); % ifft scaling (1/N not 1/K)
+            x = k * (prod(obj.K) / prod(obj.N)); % scaling (1/N not 1/K)
         end
         
         %% image projection operator (image <- image)
@@ -348,8 +338,6 @@ classdef nufft_3d
             if ~isscalar(lambda)
                 lambda = reshape(lambda,size(x,1),1);
             end
-            x = reshape(x,size(y));
-            P = reshape(P,size(y));
             y = conj(P).*y + i*lambda.^2.*imag(x);
         end
         
