@@ -133,17 +133,18 @@ classdef nufft_3d
 
             t = tic;
             
-            % no. columns
-            ncol = prod(obj.K);
-            
-            % no. rows
+            % interpolation matrix
             nrow = numel(ok);
-
-            % sparse indices
-            I = []; J = []; S = [];
+            ncol = prod(obj.K);
+            obj.H = sparse(nrow,ncol);
             
-            % push to gpu (fallback to cpu)
+            % push to gpu if needed (try/catch fallback to cpu)
             if obj.gpu
+                try
+                    obj.H  = gpuSparse(obj.H);
+                catch ME
+                    warning('%s gpuSparse failed.',ME.message);
+                end
                 try
                     kx = gpuArray(kx);
                     ky = gpuArray(ky);
@@ -151,17 +152,21 @@ classdef nufft_3d
                     ok = gpuArray(ok);
                 catch ME
                     obj.gpu = 0;
-                    warning('GPU error, fallback to CPU (%s).',ME.message);
+                    warning('%s Setting gpu=0.',ME.message);
                 end
             end
 
             % overkill on the range to include endpoints
             range = -ceil(obj.J/2):ceil(obj.J/2);           
-
+            
+            % create sparse matrix - assemble in parts (lower memory requirement)
             for ix = range
                 for iy = range
+                    
+                    I = []; J = []; S = []; 
+                    
                     for iz = range
-
+                        
                         % to allow 2d
                         if obj.N(3)==1 && iz~=0; continue; end
                         
@@ -169,7 +174,7 @@ classdef nufft_3d
                         x = round(kx) + ix;
                         y = round(ky) + iy;
                         z = round(kz) + iz;
-
+                        
                         % distance (squared) from the samples
                         dx2 = single(x-kx).^2;
                         dy2 = single(y-ky).^2;
@@ -198,37 +203,24 @@ classdef nufft_3d
                         I = cat(2,I,i); J = cat(2,J,j); S = cat(2,S,s);
                         
                     end
-                end
-            end
-
-             % clear large temporaries 
-            clearvars i j s dist2 dx2 dy2 dz2 kx ky kz x y z
-
-            % create matrix - fall through failures (e.g. out of GPU memory)
-            if obj.gpu
-                try
-                    obj.H = gpuSparse(I,J,S,nrow,ncol);
-                catch ME
-                    warning('gpuSparse error, fallback to sparse (%s).',ME.message);
-                    try
-                        S = double(S);
-                        obj.H = sparse(I,J,S,nrow,ncol);
-                    catch
-                        obj.gpu = 0;
-                        warning('GPU error, fallback to CPU (%s).',ME.message);
+                    
+                    if isa(obj.H,'gpuSparse')
+                        obj.H = obj.H + gpuSparse(I,J,S,nrow,ncol);
+                    else
+                        S = double(S); % sparse only does double
+                        obj.H = obj.H + sparse(I,J,S,nrow,ncol);
                     end
+
                 end
             end
-            if obj.gpu==0
-                I = gather(I); J = gather(I); S = gather(double(S));
-                obj.HT = sparse(J,I,S,ncol,nrow); % seems faster to create transpose
-                obj.H = obj.HT'; % store H and HT separately (assumes plenty of RAM)
-            end    
+            
+            % clear large temporaries
+            clearvars -except om obj ok t
+
+            % create transpose matrix (CPU only) 
+            if ~obj.gpu; obj.HT = obj.H'; end    
             fprintf(' Created %s matrix. ',class(obj.H)); toc(t);
 
-             % clear large temporaries 
-            clearvars -except om obj ok
-            
             %% final steps
    
             % deapodization matrix
@@ -262,7 +254,7 @@ classdef nufft_3d
             else
                 y = double(k);
             end
-            if obj.gpu==0
+            if ~isempty(obj.HT)
                 y = obj.HT' * y;
             else
                 y = obj.H * y;
