@@ -164,7 +164,7 @@ classdef nufft_3d
                 for iy = range
                     
                     I = []; J = []; S = []; 
-                    
+                                    
                     for iz = range
                         
                         % to allow 2d
@@ -210,16 +210,16 @@ classdef nufft_3d
                         S = double(S); % sparse only does double
                         obj.H = obj.H + sparse(I,J,S,nrow,ncol);
                     end
-
+                    
                 end
             end
+            fprintf(' Created %s matrix. ',class(obj.H)); toc(t);
             
             % clear large temporaries
-            clearvars -except om obj ok t
+            clearvars -except om N varargin obj ok
 
             % create transpose matrix (CPU only) 
             if ~obj.gpu; obj.HT = obj.H'; end    
-            fprintf(' Created %s matrix. ',class(obj.H)); toc(t);
 
             %% final steps
    

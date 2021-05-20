@@ -7,7 +7,7 @@ function im = iNUFT(obj,raw,maxit,damp,W,constraint,lambda)
 % -damp [scalar]: Tikhonov regularization (only when maxit>1)
 % -W [scalar, ny or nr*ny]: weighting (only when maxit>1)
 %
-% Experimental
+% Experimental optiona
 % -constraint: 'phase-constraint'
 %              'compressed-sensing'
 %              'parallel-imaging-sake'
@@ -17,7 +17,7 @@ function im = iNUFT(obj,raw,maxit,damp,W,constraint,lambda)
 % The constraints can often produce slightly better images but require
 % tweaking of lambda. They are implemented as mutually exclusive options
 % for evaluation but actually they could be used simultaneously at great
-% computational cost and probably marginal benefit.
+% computational cost and probably only marginal benefit.
 %
 %% argument checks
 
@@ -92,7 +92,7 @@ end
 if ~isscalar(W) && maxit<=1
     warning('weighting is only effective when maxit>1 - try 10');
 end
-if ~isempty(constraint) && maxit<=1
+if ~isempty(constraint) && lambda && maxit<=1
     warning('phase constraint is only effective when maxit>1 - try 10');
 end
 
@@ -140,110 +140,114 @@ end
 
 %% experimental options
 
-% phase constrained least squares
-if isequal(constraint,'phase-constraint')
+if lambda
     
-    % smoothing kernel (in image space)
-    h = exp(-(-obj.low:obj.low).^2/obj.low);
-    
-    % use regridding solution for phase
-    P = reshape(x,obj.N(1),obj.N(2),obj.N(3),nc);
-    P = circshift(P,fix(obj.N/2)); % mitigate edge effects (or use cconvn)
-    P = convn(P,reshape(h,numel(h),1,1),'same');
-    P = convn(P,reshape(h,1,numel(h),1),'same');
-    P = convn(P,reshape(h,1,1,numel(h)),'same');
-    P = circshift(P,-fix(obj.N/2)); % shift back again
-    P = exp(i*angle(P));
-    
-    % linear operator (P'A'WDAP)
-    A = @(x)obj.pprojection(x,damp,lambda,W,P);
-    
-    % rhs vector b = (P'A'WDb)
-    b = conj(P).*obj.aNUFT((W.*obj.d).*raw);
-    
-    % correct shape for solver
-    P = reshape(P,prod(obj.N),nc);
-    b = reshape(b,prod(obj.N),nc);
-    
-    % solve (P'A'WDAP)(P'x) = (P'A'WDb) + penalty on imag(P'x)
-    [x,~,relres,iter] = pcgpc(A,b,[],maxit);
-    
-    % put back the low resolution phase
-    x = P.*x;
-    
-end
-
-% compressed sensing (wavelet)
-if isequal(constraint,'compressed-sensing')
-
-    % wrapper to dwt/idwt (any orthogonal choice)
-    Q = DWT(obj.N,'db2'); % Q=forward Q'=inverse
-    
-    % rhs vector b = (QA'WDb)
-    b = Q*obj.aNUFT((W.*obj.d).*raw);
-    
-    % correct shape for solver
-    b = reshape(b,[],1);
-    
-    % linear operator (QA'WDAQ')
-    A = @(q)reshape(Q*obj.iprojection(Q'*q,damp,W),[],1);
-
-    % solve (QA'WDAQ')(q) = (QA'WDb) + penalty on ||q||_1 
-    q = pcgL1(A,b,lambda);
-
-    % q in wavelet domain so x = Q' * q
-    x = Q' * q;
-
-end
-
-% parallel imaging (sake low rank)
-if isequal(constraint,'parallel-imaging-sake')
-    
-    % use lambda as a flag for loraks
-    x = obj.sake(raw,'damp',damp,'W',W,'loraks',lambda~=0);
-    
-end
-
-% parallel imaging (pruno low rank)
-if isequal(constraint,'parallel-imaging-pruno')
-    
-    % use regridding solution for calibration
-    x = reshape(x,obj.N(1),obj.N(2),obj.N(3),nc);
-    x = fft(fft(fft(x,[],1),[],2),[],3); % kspace
-    
-    % make the nulling kernels
-    obj.fnull = obj.pruno(x) * lambda;
-    obj.anull = conj(obj.fnull);
-
-    % correct RHS for solver 
-    b = obj.aNUFT((W.*obj.d).*raw);
-    b = reshape(b,[],1);
-
-    % in Cartesian the diagonal of iprojection is the mean of
-    % the sample weighting squared (used as a preconditioner)
-    D = obj.dwsd + damp^2 + real(sum(obj.anull.*obj.fnull,5));
-    M = @(x) x./reshape(D,size(x)); % diagonal preconditioner -
-    
-    % check: measure diagonal of iprojection (V. SLOW)
-    if 0
-        N = 200; % how many to test
-        d = zeros(1,N,'like',D);
-        for j = 1:N
-            tmp = zeros(size(D));
-            tmp(j) = 1; tmp = obj.iprojection(tmp,damp,W);
-            d(j) = real(tmp(j)); fprintf('%i/%i\n',j,N);
-        end
-        plot([d;D(1:N);d-D(1:N)]'); legend({'exact','estimate','diff'});
-        keyboard
+    % phase constrained least squares
+    if isequal(constraint,'phase-constraint')
+        
+        % smoothing kernel (in image space)
+        h = exp(-(-obj.low:obj.low).^2/obj.low);
+        
+        % use regridding solution for phase
+        P = reshape(x,obj.N(1),obj.N(2),obj.N(3),nc);
+        P = circshift(P,fix(obj.N/2)); % mitigate edge effects (or use cconvn)
+        P = convn(P,reshape(h,numel(h),1,1),'same');
+        P = convn(P,reshape(h,1,numel(h),1),'same');
+        P = convn(P,reshape(h,1,1,numel(h)),'same');
+        P = circshift(P,-fix(obj.N/2)); % shift back again
+        P = exp(i*angle(P));
+        
+        % linear operator (P'A'WDAP)
+        A = @(x)obj.pprojection(x,damp,lambda,W,P);
+        
+        % rhs vector b = (P'A'WDb)
+        b = conj(P).*obj.aNUFT((W.*obj.d).*raw);
+        
+        % correct shape for solver
+        P = reshape(P,prod(obj.N),nc);
+        b = reshape(b,prod(obj.N),nc);
+        
+        % solve (P'A'WDAP)(P'x) = (P'A'WDb) + penalty on imag(P'x)
+        [x,~,relres,iter] = pcgpc(A,b,[],maxit);
+        
+        % put back the low resolution phase
+        x = P.*x;
+        
     end
     
-    % least squares (A'WA)(x) = (A'Wb) + penalty on ||null*x||
-    iters = 100; % need about 100
-    x = pcgpc(@(x)obj.iprojection(x,damp,W),b,[],iters,M);
-
+    % compressed sensing (wavelet)
+    if isequal(constraint,'compressed-sensing')
+        
+        % wrapper to dwt/idwt (any orthogonal choice)
+        Q = DWT(obj.N,'db2'); % Q=forward Q'=inverse
+        
+        % rhs vector b = (QA'WDb)
+        b = Q*obj.aNUFT((W.*obj.d).*raw);
+        
+        % correct shape for solver
+        b = reshape(b,[],1);
+        
+        % linear operator (QA'WDAQ')
+        A = @(q)reshape(Q*obj.iprojection(Q'*q,damp,W),[],1);
+        
+        % solve (QA'WDAQ')(q) = (QA'WDb) + penalty on ||q||_1
+        q = pcgL1(A,b,lambda);
+        
+        % q in wavelet domain so x = Q' * q
+        x = Q' * q;
+        
+    end
+    
+    % parallel imaging (sake low rank)
+    if isequal(constraint,'parallel-imaging-sake')
+        
+        % loraks is either on or off
+        x = obj.sake(raw,'damp',damp,'W',W,'loraks',lambda>0);
+        
+    end
+    
+    % parallel imaging (pruno low rank)
+    if isequal(constraint,'parallel-imaging-pruno')
+        
+        % use regridding solution for calibration
+        x = reshape(x,obj.N(1),obj.N(2),obj.N(3),nc);
+        x = fft(fft(fft(x,[],1),[],2),[],3); % kspace
+        
+        % make the nulling kernels
+        obj.fnull = obj.pruno(x) * lambda;
+        obj.anull = conj(obj.fnull);
+        
+        % correct RHS for solver
+        b = obj.aNUFT((W.*obj.d).*raw);
+        b = reshape(b,[],1);
+        
+        % in Cartesian the diagonal of iprojection is the mean of
+        % the sample weighting squared (used as a preconditioner)
+        D = obj.dwsd + damp^2 + real(sum(obj.anull.*obj.fnull,5));
+        M = @(x) x./reshape(D,size(x)); % diagonal preconditioner -
+        
+        % check: measure diagonal of iprojection (V. SLOW)
+        if 0
+            N = 200; % how many to test
+            d = zeros(1,N,'like',D);
+            for j = 1:N
+                tmp = zeros(size(D));
+                tmp(j) = 1; tmp = obj.iprojection(tmp,damp,W);
+                d(j) = real(tmp(j)); fprintf('%i/%i\n',j,N);
+            end
+            plot([d;D(1:N);d-D(1:N)]'); legend({'exact','estimate','diff'});
+            keyboard
+        end
+        
+        % least squares (A'WA)(x) = (A'Wb) + penalty on ||null*x||
+        iters = 100; % need about 100
+        x = pcgpc(@(x)obj.iprojection(x,damp,W),b,[],iters,M);
+        
+    end
+    
 end
 
-% reshape into image format
+%% reshape into image format
 im = reshape(gather(x),obj.N(1),obj.N(2),obj.N(3),nc);
 
 fprintf('  %s returned %ix%ix%ix%i dataset. ',mfilename,obj.N(1),obj.N(2),obj.N(3),nc); toc;
