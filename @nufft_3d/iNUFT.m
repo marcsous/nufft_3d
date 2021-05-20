@@ -7,7 +7,7 @@ function im = iNUFT(obj,raw,maxit,damp,W,constraint,lambda)
 % -damp [scalar]: Tikhonov regularization (only when maxit>1)
 % -W [scalar, ny or nr*ny]: weighting (only when maxit>1)
 %
-% Experimental optiona
+% Experimental options
 % -constraint: 'phase-constraint'
 %              'compressed-sensing'
 %              'parallel-imaging-sake'
