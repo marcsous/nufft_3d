@@ -156,7 +156,7 @@ classdef nufft_3d
                 end
             end
 
-            % overkill on the range to include endpoints
+            % overkill to include endpoints
             range = -ceil(obj.J/2):ceil(obj.J/2);           
             
             % create sparse matrix - assemble in parts (lower memory requirement)
@@ -227,7 +227,17 @@ classdef nufft_3d
             obj.U = obj.deap();
             
             % density weighting
-            [obj.d obj.sd obj.dwsd] = obj.density(ok);
+            [tmp obj.sd obj.dwsd] = obj.density(ok);
+            
+            if isempty(obj.d)
+                obj.d = tmp; % use the default calculated density
+            else
+                if numel(tmp)~=numel(obj.d)
+                    error('supplied density has wrong number of elements (%i)',numel(obj.d));
+                end
+                obj.d = cast(reshape(obj.d,size(tmp)),'like',tmp);
+                obj.d(~ok) = 0; % exclude out of bounds points
+            end
             
             % we are going to do a lot of ffts of the same type so tune it
             fftw('planner','measure');           
@@ -332,7 +342,7 @@ classdef nufft_3d
             end
             y = conj(P).*y + i*lambda.^2.*imag(x);
         end
-        
+
     end
     
 end
