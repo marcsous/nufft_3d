@@ -140,7 +140,7 @@ end
 
 %% experimental options
 
-if lambda
+if ~isempty(constraint)
     
     % phase constrained least squares
     if isequal(constraint,'phase-constraint')
