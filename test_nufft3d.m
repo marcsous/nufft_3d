@@ -24,19 +24,19 @@ for k = 1:nRadialSpokes
     
     % golden angle (http://blog.wolfram.com/2011/07/28/how-i-made-wine-glasses-from-sunflowers)
     dH = 1 - 2 * (k-1) / (nRadialSpokes-1);
-    AzimuthalAngle(k) = acos(dH);
-    PolarAngle(k) = max(k-1,0) * pi * (3 - sqrt(5));
+    PolarAngle(k) = acos(dH);
+    AzimuthalAngle(k) = max(k-1,0) * pi * (3 - sqrt(5));
     
     % rotation matrix
-    RotationMatrix(1,1) = cos(PolarAngle(k))*cos(AzimuthalAngle(k));
-    RotationMatrix(1,2) =-sin(PolarAngle(k));
-    RotationMatrix(1,3) = cos(PolarAngle(k))*sin(AzimuthalAngle(k));
-    RotationMatrix(2,1) = sin(PolarAngle(k))*cos(AzimuthalAngle(k));
-    RotationMatrix(2,2) = cos(PolarAngle(k));
-    RotationMatrix(2,3) = sin(PolarAngle(k))*sin(AzimuthalAngle(k));
-    RotationMatrix(3,1) =-sin(AzimuthalAngle(k));
+    RotationMatrix(1,1) = cos(AzimuthalAngle(k))*cos(PolarAngle(k));
+    RotationMatrix(1,2) =-sin(AzimuthalAngle(k));
+    RotationMatrix(1,3) = cos(AzimuthalAngle(k))*sin(PolarAngle(k));
+    RotationMatrix(2,1) = sin(AzimuthalAngle(k))*cos(PolarAngle(k));
+    RotationMatrix(2,2) = cos(AzimuthalAngle(k));
+    RotationMatrix(2,3) = sin(AzimuthalAngle(k))*sin(PolarAngle(k));
+    RotationMatrix(3,1) =-sin(PolarAngle(k));
     RotationMatrix(3,2) = 0.0;
-    RotationMatrix(3,3) = cos(AzimuthalAngle(k));
+    RotationMatrix(3,3) = cos(PolarAngle(k));
     
     % rotate the readout
     om(:,:,k) = RotationMatrix * [x; y; z];
