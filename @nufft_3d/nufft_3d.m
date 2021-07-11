@@ -119,7 +119,7 @@ classdef nufft_3d
             fprintf('   om(2):    %.3f       %.3f      %i\n',min(om(2,:)),max(om(2,:)),obj.N(2))           
             fprintf('   om(3):    %.3f       %.3f      %i\n',min(om(3,:)),max(om(3,:)),obj.N(3))
             
-            % scale trajectory units (need double to stay below flintmax in sparse indicies)
+            % scale trajectory (doubles to stay below flintmax when calculating sparse indicies)
             kx = obj.u * double(om(1,:));
             ky = obj.u * double(om(2,:));
             kz = obj.u * double(om(3,:));
@@ -201,6 +201,9 @@ classdef nufft_3d
                         if ~verLessThan('matlab','9.8'); i = int32(i); end
                         if ~verLessThan('matlab','9.8'); j = int32(j); end
                         I = cat(2,I,i); J = cat(2,J,j); S = cat(2,S,s);
+                        
+                        % clear temporaries
+                        clearvars i j s x y z dx2 dy2 dz2 dist2
                         
                     end
                     
