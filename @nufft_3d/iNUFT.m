@@ -108,10 +108,8 @@ end
 if obj.gpu
     W = gpuArray(W);
     raw = gpuArray(single(raw));
-    im = zeros(obj.N(1),obj.N(2),obj.N(3),nc,'single');
 else
-    raw = double(raw);
-    im = zeros(obj.N(1),obj.N(2),obj.N(3),nc,'double');
+    raw = double(gather(raw));
 end
 
 %% iNUFT reconstruction: solve Ax=b
