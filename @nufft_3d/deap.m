@@ -33,14 +33,14 @@ end
 %% inverse Fourier transform of kernel (remove 2x oversampling)
 
 for j = 1:2+(obj.N(3)>1)
-    U = ifft(U*obj.K(j),2*obj.K(j),j,'symmetric');
+    U = ifft(U*double(obj.K(j)),2*obj.K(j),j,'symmetric');
     if j==1; U(1+obj.N(1)/2:end-obj.N(1)/2,:,:) = []; end
     if j==2; U(:,1+obj.N(2)/2:end-obj.N(2)/2,:) = []; end
     if j==3; U(:,:,1+obj.N(3)/2:end-obj.N(3)/2) = []; end
 end
 U = fftshift(U);
 
-%% analytical formule for testing
+%% analytical formulas for testing
 
 if 0
     

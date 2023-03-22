@@ -24,22 +24,22 @@ classdef nufft_3d
     
     % key parameters
     properties (SetAccess = private)
-        J(1,1) double         = 4  % kernel width (4)
-        u(1,1) double         = 2  % oversampling factor (2)
-        N(3,1) double = zeros(3,1) % final image dimensions
-        alpha(1,1) double     = 0  % kaiser-bessel parameter (0=Beatty optimal)
-        radial(1,1) logical   = 0  % radial kernel (1=yes 0=no)        
+        J(1,1) double         = 4 % kernel width (4)
+        u(1,1) double         = 2 % oversampling factor (2)
+        N(3,1) int32 = zeros(3,1) % final image dimensions
+        alpha(1,1) double     = 0 % kaiser-bessel parameter (0=Beatty optimal)
+        radial(1,1) logical   = 0 % radial kernel (1=yes 0=no)        
     end
     
     % behind the scenes parameters
     properties (SetAccess = private, Hidden = true)
-        gpu(1,1) logical      = 1  % use gpu/gpuSparse if possible (0=no 1=yes)
-        low(1,1) double       = 5  % lowpass filter: h = exp(-(-low:low).^2/low)
-        K(3,1) double = zeros(3,1) % oversampled image dimensions   
-        d(:,1)                     % density weighting vector 
-        H(:,:)                     % sparse interpolation matrix
-        HT(:,:)                    % transpose of H (stored separately on CPU)        
-        U(:,:,:)                   % deapodization matrix
+        gpu(1,1) logical      = 1 % use gpu/gpuSparse if possible (0=no 1=yes)
+        low(1,1) double       = 5 % lowpass filter: h = exp(-(-low:low).^2/low)
+        K(3,1) int32 = zeros(3,1) % oversampled image dimensions   
+        d(:,1)                    % density weighting vector 
+        H(:,:)                    % sparse interpolation matrix
+        HT(:,:)                   % transpose of H (stored separately on CPU)        
+        U(:,:,:)                  % deapodization matrix
     end
 
     % experimental parameters
@@ -109,24 +109,24 @@ classdef nufft_3d
                 obj.N(3) = 1;
             end
             
-            % oversampled matrix size (must be even)
+            % oversampled matrix size (must be even & int32 limited to 1280^3)
             obj.K = 2 * ceil(obj.N * obj.u / 2);
             if obj.N(3) == 1; obj.K(3) = 1; end
+            if prod(obj.K)>=intmax('int32'); error('N or u too large for int32'); end
             
             % display trajectory limits
-            disp(' Trajectory:     min        max        matrix')
-            fprintf('   om(1):    %.3f       %.3f      %i\n',min(om(1,:)),max(om(1,:)),obj.N(1))
-            fprintf('   om(2):    %.3f       %.3f      %i\n',min(om(2,:)),max(om(2,:)),obj.N(2))           
-            fprintf('   om(3):    %.3f       %.3f      %i\n',min(om(3,:)),max(om(3,:)),obj.N(3))
+            disp(' Trajectory:     min       max       matrix')
+            fprintf('  om(1): %12.3f %9.3f %9i\n',min(om(1,:)),max(om(1,:)),obj.N(1))
+            fprintf('  om(2): %12.3f %9.3f %9i\n',min(om(2,:)),max(om(2,:)),obj.N(2))           
+            fprintf('  om(3): %12.3f %9.3f %9i\n',min(om(3,:)),max(om(3,:)),obj.N(3))
             
-            % scale trajectory (doubles to stay below flintmax when calculating sparse indicies)
-            kx = obj.u * double(om(1,:));
-            ky = obj.u * double(om(2,:));
-            kz = obj.u * double(om(3,:));
+            % scale trajectory
+            om = obj.u * single(om);
 
             % only keep points that are within bounds
-            ok = kx >= -obj.K(1)/2 & kx <= obj.K(1)/2-1 & ky >= -obj.K(2)/2 & ky <= obj.K(2)/2-1;
-            if obj.N(3)>1; ok = ok & kz >= -obj.K(3)/2 & kz <= obj.K(3)/2-1; end % allow 2d
+            ok = om(1,:) >= -obj.K(1)/2 & om(1,:) <= obj.K(1)/2-1;
+            ok = om(2,:) >= -obj.K(2)/2 & om(2,:) <= obj.K(2)/2-1 & ok;
+            ok = om(3,:) >= -obj.K(3)/2 & om(3,:) <= obj.K(3)/2-1 & ok;
             fprintf('  %i points (out of %i) are out of bounds.\n',sum(~ok),numel(ok))
             
             %% set up interpolation matrix
@@ -146,9 +146,7 @@ classdef nufft_3d
                     warning('%s gpuSparse failed.',ME.message);
                 end
                 try
-                    kx = gpuArray(kx);
-                    ky = gpuArray(ky);
-                    kz = gpuArray(kz);
+                    om = gpuArray(om);
                     ok = gpuArray(ok);
                 catch ME
                     obj.gpu = 0;
@@ -157,13 +155,14 @@ classdef nufft_3d
             end
 
             % overkill to include endpoints
-            range = -ceil(obj.J/2):ceil(obj.J/2);           
+            range = -ceil(obj.J/2):ceil(obj.J/2);  
             
             % create sparse matrix - assemble in parts (lower memory requirement)
             for ix = range
                 for iy = range
                     
-                    I = []; J = []; S = []; 
+                    % work in 32-bit to reduce memory use
+                    I = int32([]); J = int32([]); S = single([]); 
                                     
                     for iz = range
                         
@@ -171,46 +170,46 @@ classdef nufft_3d
                         if obj.N(3)==1 && iz~=0; continue; end
                         
                         % neighboring grid points (keep ix,iy,iz outside for consistent rounding)
-                        x = round(kx) + ix;
-                        y = round(ky) + iy;
-                        z = round(kz) + iz;
+                        x = int32(om(1,:)) + ix;
+                        y = int32(om(2,:)) + iy;
+                        z = int32(om(3,:)) + iz;
                         
                         % distance (squared) from the samples
-                        dx2 = single(x-kx).^2;
-                        dy2 = single(y-ky).^2;
-                        dz2 = single(z-kz).^2;
-                        dist2 = dx2 + dy2 + dz2;
+                        dx2 = (single(x)-om(1,:)).^2;
+                        dy2 = (single(y)-om(2,:)).^2;
+                        dz2 = (single(z)-om(3,:)).^2;
                         
                         % wrap negatives (kspace centered at 0)
                         x = mod(x,obj.K(1));
                         y = mod(y,obj.K(2));
                         z = mod(z,obj.K(3));
                         
-                        % sparse matrix indices: use <= to include endpoints (higher accuracy)
+                        % sparse matrix indices: use <= to include endpoints for accuracy
                         if obj.radial
-                            i = find(ok & 4*dist2 <= obj.J^2);
+                            dist2 = dx2 + dy2 + dz2;
+                            i = ok & 4*dist2 <= obj.J^2;
                             j = 1 + x(i) + obj.K(1)*y(i) + obj.K(1)*obj.K(2)*z(i);
                             s = obj.kernel(dist2(i));
                         else
-                            i = find(ok & 4*dx2 <= obj.J^2 & 4*dy2 <= obj.J^2 & 4*dz2 <= obj.J^2);
+                            i = ok & 4*dx2 <= obj.J^2 & 4*dy2 <= obj.J^2 & 4*dz2 <= obj.J^2;
                             j = 1 + x(i) + obj.K(1)*y(i) + obj.K(1)*obj.K(2)*z(i);
                             s = obj.kernel(dx2(i)).*obj.kernel(dy2(i)).*obj.kernel(dz2(i));
                         end
 
                         % store indices for sparse call
-                        if ~verLessThan('matlab','9.8'); i = int32(i); end
-                        if ~verLessThan('matlab','9.8'); j = int32(j); end
-                        I = cat(2,I,i); J = cat(2,J,j); S = cat(2,S,s);
+                        I = cat(2,I,find(i)); J = cat(2,J,j); S = cat(2,S,s);
                         
                         % clear temporaries
                         clearvars i j s x y z dx2 dy2 dz2 dist2
                         
                     end
-                    
+
                     if isa(obj.H,'gpuSparse')
                         obj.H = obj.H + gpuSparse(I,J,S,nrow,ncol);
                     else
-                        S = double(S); % sparse only does double
+                        S = double(S); % sparse only accepts doubles
+                        if ~verLessThan('matlab','9.8'); I = double(I); end
+                        if ~verLessThan('matlab','9.8'); J = double(J); end
                         obj.H = obj.H + sparse(I,J,S,nrow,ncol);
                     end
                     
