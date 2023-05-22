@@ -33,12 +33,12 @@ classdef nufft_3d
     
     % behind the scenes parameters
     properties (SetAccess = private, Hidden = true)
-        gpu(1,1) logical      = 1 % use gpu/gpuSparse if possible (0=no 1=yes)
+        gpu(1,1) int32        = 1 % use GPU (0=no 1=gpuSparse 2=gpuArray)
         low(1,1) double       = 5 % lowpass filter: h = exp(-(-low:low).^2/low)
         K(3,1) int32 = zeros(3,1) % oversampled image dimensions   
         d(:,1)                    % density weighting vector 
-        H(:,:)                    % sparse interpolation matrix
-        HT(:,:)                   % transpose of H (stored separately on CPU)        
+        H                         % sparse interpolation matrix
+        HT                        % transpose of H (stored separately on CPU)        
         U(:,:,:)                  % deapodization matrix
     end
 
@@ -110,7 +110,7 @@ classdef nufft_3d
             end
             
             % oversampled matrix size (must be even & int32 limited to 1280^3)
-            obj.K = 2 * ceil(obj.N * obj.u / 2);
+            obj.K = 2 * (obj.N * obj.u / 2);
             if obj.N(3) == 1; obj.K(3) = 1; end
             if prod(obj.K)>=intmax('int32'); error('N or u too large for int32'); end
             
@@ -141,9 +141,9 @@ classdef nufft_3d
             % push to gpu if needed (try/catch fallback to cpu)
             if obj.gpu
                 try
-                    obj.H  = gpuSparse(obj.H);
+                    if obj.gpu==1; obj.H = gpuSparse(obj.H); end
                 catch ME
-                    warning('%s gpuSparse failed.',ME.message);
+                    warning('%s Trying gpuArray sparse.',ME.message);
                 end
                 try
                     om = gpuArray(om);
@@ -155,7 +155,7 @@ classdef nufft_3d
             end
 
             % overkill to include endpoints
-            range = -ceil(obj.J/2):ceil(obj.J/2);  
+            range = -ceil(obj.J/2):ceil(obj.J/2);
             
             % create sparse matrix - assemble in parts (lower memory requirement)
             for ix = range
@@ -212,7 +212,7 @@ classdef nufft_3d
                         if ~verLessThan('matlab','9.8'); J = double(J); end
                         obj.H = obj.H + sparse(I,J,S,nrow,ncol);
                     end
-                    
+
                 end
             end
             fprintf(' Created %s matrix. ',class(obj.H)); toc(t);
@@ -220,17 +220,16 @@ classdef nufft_3d
             % clear large temporaries
             clearvars -except om N varargin obj ok
 
-            % create transpose matrix (CPU only) 
-            if ~obj.gpu; obj.HT = obj.H'; end    
+            % store transpose matrix (CPU only where A*x and A'*x differ in speed) 
+            if obj.gpu==0; obj.HT = obj.H'; end
 
             %% final steps
    
             % deapodization matrix
             obj.U = obj.deap();
             
-            % density weighting
+            % density weighting (default or user supplied)
             [tmp obj.sd obj.dwsd] = obj.density(ok);
-            
             if isempty(obj.d)
                 obj.d = tmp; % use the default calculated density
             else
@@ -242,7 +241,7 @@ classdef nufft_3d
             end
             
             % we are going to do a lot of ffts of the same type so tune it
-            fftw('planner','measure');           
+            fftw('planner','measure');      
 
             % display properties
             fprintf(' Created'); disp(obj);
