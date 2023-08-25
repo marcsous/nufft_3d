@@ -34,7 +34,7 @@ classdef nufft_3d
     % behind the scenes parameters
     properties (SetAccess = private, Hidden = true)
         gpu(1,1) int32        = 1 % use GPU (0=no 1=gpuSparse 2=gpuArray)
-        low(1,1) double       = 3 % lowpass filter: h = exp(-(-low:low).^2/low)
+        low(1,1) double       = 1 % lowpass filter: h = exp(-(-low:low).^2/low)
         K(3,1) int32 = zeros(3,1) % oversampled image dimensions   
         d(:,1)                    % density weighting vector 
         H                         % sparse interpolation matrix
@@ -94,8 +94,8 @@ classdef nufft_3d
             if obj.radial && (obj.J<3 || obj.u<1.5)
                 warning('radial kernel not recommended with J<3 or u<1.5');
             end
-            if ~isscalar(obj.low) || obj.low<0 || mod(obj.low,1)
-                error('low must be a nonnegative integer');
+            if ~isscalar(obj.low) || obj.low<0
+                error('low must be a nonnegative scalar');
             end
             if (numel(N)==1 || numel(N)==3) && isnumeric(N)
                 obj.N = ones(3,1).*reshape(N,[],1); N = [];
