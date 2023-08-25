@@ -1,10 +1,10 @@
-% test nufft_3d.m
+% test nufft_3d.m (works much faster on GPU)
 clear all
 
 %% object - 3D Cartesian object
 N = 128;
-im = phantom3d(N); % 3d shepp logan phantom
-im(im==1) = i; % add phase to make it realistic
+im0 = phantom3d(N); % 3d shepp logan phantom
+im0(im0==1) = i; % add phase to make it realistic
 
 %% generate koosh ball data
 nInterleaves = 21; % Fibonacci number
@@ -51,22 +51,25 @@ om = reshape(om(:,:,k),3,numel(traj),[],nInterleaves);
 obj = nufft_3d(om,N);
 
 %% generate data (forward transform)
-data = obj.fNUFT(im);
+data = obj.fNUFT(im0);
 noise = complex(randn(size(data)),randn(size(data))) * 10;
 data = data+noise;
 
 %% reconstruction (inverse transform)
 maxit = 10; % 0 or 1 for gridding, higher values for conjugate gradient
-damp = 0; % Tikhonov penalty on ||x||
 weight = []; % data weighting (optional)
-partial = 0.5; % Tikhobov penalty on ||imag(x))||
-im1 = obj.iNUFT(data,maxit); % plain reconstruction
+
+damp = 0; % L2 penalty on ||x||
+im1 = obj.iNUFT(data,maxit);
+
+partial = 0.5; % L2 penalty on ||imag(x))||
 im2 = obj.iNUFT(data,maxit,damp,weight,'phase-constraint',partial);
 
+cs = 1e-2; % L1 penalty in wavelet domain
+im3 = obj.iNUFT(data,maxit,damp,weight,'compressed-sensing',cs);
+
 %% display
-subplot(1,4,1);
-plot3(squeeze(om(1,end,:,1))',squeeze(om(2,end,:,1))',squeeze(om(3,end,:,1))','.');
-title('interleave 1'); grid on;
-subplot(1,4,2); imagesc(abs(im(:,:,N/2)),[0 1]); colorbar; title('original');
-subplot(1,4,3); imagesc(abs(im1(:,:,N/2)),[0 1]); colorbar; title('radial');
-subplot(1,4,4); imagesc(abs(im2(:,:,N/2)),[0 1]); colorbar; title('radial+phase constraint');
+subplot(2,2,1); imagesc(abs(im(:,:,N/2+1)), [0 0.5]); colorbar; title('original');
+subplot(2,2,2); imagesc(abs(im1(:,:,N/2+1)),[0 0.5]); colorbar; title('least squares');
+subplot(2,2,3); imagesc(abs(im2(:,:,N/2+1)),[0 0.5]); colorbar; title('phase constraint');
+subplot(2,2,4); imagesc(abs(im3(:,:,N/2+1)),[0 0.5]); colorbar; title('compressed sensing');

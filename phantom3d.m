@@ -14,7 +14,7 @@ function [p,ellipse]=phantom3d(varargin)
 %                               visual perception.
 %
 %   N is a scalar that specifies the grid size of P.
-%   If you omit the argument, N defaults to 64.
+%   If you omit the argument, N defaults to 128.
 % 
 %   P = PHANTOM3D(E,N) generates a user-defined phantom, where each row
 %   of the matrix E specifies an ellipsoid in the image.  E has ten columns,
@@ -71,11 +71,17 @@ function [p,ellipse]=phantom3d(varargin)
 
 [ellipse,n] = parse_inputs(varargin{:});
 
-p = zeros([n n n]);
+p = zeros(n);
 
-rng =  ( (0:n-1)-(n-1)/2 ) / ((n-1)/2); 
+rng_x =  ( (0:n(1)-1)-(n(1)-1)/2 ) / ((n(1)-1)/2); 
+rng_y =  ( (0:n(2)-1)-(n(2)-1)/2 ) / ((n(2)-1)/2); 
+rng_z =  ( (0:n(3)-1)-(n(3)-1)/2 ) / ((n(3)-1)/2); 
 
-[x,y,z] = meshgrid(rng,rng,rng);
+if n(3)<2 % 2D
+    z = []; [x,y] = meshgrid(rng_x,rng_y);
+else
+    [x,y,z] = meshgrid(rng_x,rng_y,rng_z);
+end
 
 coord = [flatten(x); flatten(y); flatten(z)];
 
@@ -105,14 +111,19 @@ for k = 1:size(ellipse,1)
             -spsi*cphi-ctheta*sphi*cpsi  -spsi*sphi+ctheta*cphi*cpsi cpsi*stheta;
             stheta*sphi                  -stheta*cphi                ctheta];        
    
+   if n(3)<2; alpha = alpha(1:2,1:2); end
+   
    % rotated ellipsoid coordinates
    coordp = alpha*coord;
    
-   idx = find((coordp(1,:)-x0).^2./asq + (coordp(2,:)-y0).^2./bsq + (coordp(3,:)-z0).^2./csq <= 1);
+   dist = (coordp(1,:)-x0).^2./asq + (coordp(2,:)-y0).^2./bsq;
+   if n(3)>1; dist = dist + (coordp(3,:)-z0).^2./csq; end
+   idx = dist <= 1;
+   
    p(idx) = p(idx) + A;
 end
 
-p = reshape(p,[n n n]);
+p = reshape(p,n);
 
 return;
 
@@ -131,6 +142,7 @@ function [e,n] = parse_inputs(varargin)
 n = 128;     % The default size
 e = [];
 defaults = {'shepp-logan', 'modified shepp-logan', 'yu-ye-wang'};
+if isempty(varargin); n = [n n 1]; end % default to 2D
 
 for i=1:nargin
    if ischar(varargin{i})         % Look for a default phantom
@@ -150,8 +162,12 @@ for i=1:nargin
          e = yu_ye_wang;
       end
    elseif numel(varargin{i})==1 
-      n = varargin{i};            % a scalar is the image size
-   elseif ndims(varargin{i})==2 && size(varargin{i},2)==10 
+      n = repmat(varargin{i},1,3);  % 1D scalar -> 3D image
+   elseif numel(varargin{i})==2
+      n = [varargin{i}(:)' 1];      % 2D vector -> 2D image
+   elseif numel(varargin{i})==3
+      n = varargin{i}(:)';          % 3D vector -> 3D image
+   elseif numel(varargin{i})==10 
       e = varargin{i};            % user specified phantom
    else
       eid = sprintf('Images:%s:invalidInputArgs',mfilename);
