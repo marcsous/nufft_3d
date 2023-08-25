@@ -144,11 +144,7 @@ if ~isempty(constraint)
     if isequal(constraint,'phase-constraint')
         
         % smoothing kernel (in image space)
-        if obj.low==0
-            h = 1;
-        else
-            h = exp(-(-ceil(obj.low):ceil(obj.low)).^2/obj.low);
-        end
+        h = exp(-(-ceil(obj.low):ceil(obj.low)).^2/hypot(obj.low,eps));
 
         % use regridding solution for phase
         P = reshape(x,obj.N(1),obj.N(2),obj.N(3),nc);
