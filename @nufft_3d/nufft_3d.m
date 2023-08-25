@@ -208,8 +208,8 @@ classdef nufft_3d
                         obj.H = obj.H + gpuSparse(I,J,S,nrow,ncol);
                     else
                         S = double(S); % sparse only accepts doubles
-                        if ~verLessThan('matlab','9.8'); I = double(I); end
-                        if ~verLessThan('matlab','9.8'); J = double(J); end
+                        if verLessThan('matlab','9.8'); I = double(I); end
+                        if verLessThan('matlab','9.8'); J = double(J); end
                         obj.H = obj.H + sparse(I,J,S,nrow,ncol);
                     end
 
