@@ -34,7 +34,7 @@ classdef nufft_3d
     % behind the scenes parameters
     properties (SetAccess = private, Hidden = true)
         gpu(1,1) int32        = 1 % use GPU (0=no 1=gpuSparse 2=gpuArray)
-        low(1,1) double       = 5 % lowpass filter: h = exp(-(-low:low).^2/low)
+        low(1,1) double       = 3 % lowpass filter: h = exp(-(-low:low).^2/low)
         K(3,1) int32 = zeros(3,1) % oversampled image dimensions   
         d(:,1)                    % density weighting vector 
         H                         % sparse interpolation matrix
