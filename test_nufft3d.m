@@ -62,7 +62,7 @@ weight = []; % data weighting (optional)
 damp = 1e-2; % L2 penalty on ||x||
 im1 = obj.iNUFT(data,maxit,damp);
 
-partial = 1; % L2 penalty on ||imag(x))||
+partial = 1e2; % L2 penalty on ||imag(x))||
 im2 = obj.iNUFT(data,maxit,damp,weight,'phase-constraint',partial);
 
 cs = 1e-2; % L1 penalty in wavelet domain
