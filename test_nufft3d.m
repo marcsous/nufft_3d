@@ -59,10 +59,10 @@ data = data+noise;
 maxit = 10; % 0 or 1 for gridding, higher values for conjugate gradient
 weight = []; % data weighting (optional)
 
-damp = 0; % L2 penalty on ||x||
-im1 = obj.iNUFT(data,maxit);
+damp = 1e-2; % L2 penalty on ||x||
+im1 = obj.iNUFT(data,maxit,damp);
 
-partial = 0.5; % L2 penalty on ||imag(x))||
+partial = 1; % L2 penalty on ||imag(x))||
 im2 = obj.iNUFT(data,maxit,damp,weight,'phase-constraint',partial);
 
 cs = 1e-2; % L1 penalty in wavelet domain
