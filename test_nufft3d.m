@@ -7,8 +7,7 @@ im0 = phantom3d(N); % 3d shepp logan phantom
 im0(im0==1) = i; % add phase to make it realistic
 
 %% generate koosh ball data
-nInterleaves = 21; % Fibonacci number
-nRadialSpokes = fix(5000 / nInterleaves) * nInterleaves;
+nRadialSpokes = 6666;
 
 % a (kind of) density adapted readout 
 grad = [linspace(0,1,20) ones(1,20) linspace(1,0,N).^1.25];
@@ -25,7 +24,7 @@ for k = 1:nRadialSpokes
     % golden angle (http://blog.wolfram.com/2011/07/28/how-i-made-wine-glasses-from-sunflowers)
     dH = 1 - 2 * (k-1) / (nRadialSpokes-1);
     PolarAngle(k) = acos(dH);
-    AzimuthalAngle(k) = max(k-1,0) * pi * (3 - sqrt(5));
+    AzimuthalAngle(k) = (k-1) * pi * (3 - sqrt(5));
     
     % rotation matrix
     RotationMatrix(1,1) = cos(AzimuthalAngle(k))*cos(PolarAngle(k));
@@ -43,16 +42,12 @@ for k = 1:nRadialSpokes
     
 end
 
-% sort into interleaves (works for golden angle)
-k = reshape(1:nRadialSpokes,nInterleaves,[])';
-om = reshape(om(:,:,k),3,numel(traj),[],nInterleaves);
-
 %% create nufft object
 obj = nufft_3d(om,N);
 
 %% generate data (forward transform)
 data = obj.fNUFT(im0);
-noise = complex(randn(size(data)),randn(size(data))) * 10;
+noise = complex(randn(size(data)),randn(size(data)));
 data = data+noise;
 
 %% reconstruction (inverse transform)
@@ -65,7 +60,7 @@ im1 = obj.iNUFT(data,maxit,damp);
 partial = 1e2; % L2 penalty on ||imag(x))||
 im2 = obj.iNUFT(data,maxit,damp,weight,'phase-constraint',partial);
 
-cs = 1e-2; % L1 penalty in wavelet domain
+cs = 1e-2; % L1 penalty on ||Q(x)|| (Q=wavelet transform)
 im3 = obj.iNUFT(data,maxit,damp,weight,'compressed-sensing',cs);
 
 %% display
