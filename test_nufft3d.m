@@ -69,7 +69,7 @@ cs = 1e-2; % L1 penalty in wavelet domain
 im3 = obj.iNUFT(data,maxit,damp,weight,'compressed-sensing',cs);
 
 %% display
-subplot(2,2,1); imagesc(abs(im(:,:,N/2+1)), [0 0.5]); colorbar; title('original');
+subplot(2,2,1); imagesc(abs(im0(:,:,N/2+1)),[0 0.5]); colorbar; title('original');
 subplot(2,2,2); imagesc(abs(im1(:,:,N/2+1)),[0 0.5]); colorbar; title('least squares');
 subplot(2,2,3); imagesc(abs(im2(:,:,N/2+1)),[0 0.5]); colorbar; title('phase constraint');
 subplot(2,2,4); imagesc(abs(im3(:,:,N/2+1)),[0 0.5]); colorbar; title('compressed sensing');
