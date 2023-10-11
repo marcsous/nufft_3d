@@ -1,17 +1,17 @@
 % test nufft_3d.m (works much faster on GPU)
 clear all
 
-%% object - 3D Cartesian object
-N = 128;
-im0 = phantom3d(N); % 3d shepp logan phantom
-im0(im0==1) = i; % add phase to make it realistic
+%% object - 3d shepp logan phantom
+N = 160;
+im0 = phantom3d(N);
+im0(im0==1) = i; % add phase
 
 %% generate koosh ball data
 nRadialSpokes = 6666;
 
 % a (kind of) density adapted readout 
 grad = [linspace(0,1,20) ones(1,20) linspace(1,0,N).^1.25];
-traj = cumsum(grad); traj = traj * (N/2-1) / max(traj);
+traj = cumsum(grad); traj = traj * (N/2-0.1) / max(traj);
 
 z = traj;
 y = zeros(size(z));
@@ -42,26 +42,26 @@ for k = 1:nRadialSpokes
     
 end
 
-%% create nufft object
-obj = nufft_3d(om,N);
+%% create nufft object (gpu=0 CPU, gpu=1 gpuSparse, gpu=2 gpuArray)
+obj = nufft_3d(om,N,'gpu',1);
 
 %% generate data (forward transform)
 data = obj.fNUFT(im0);
 noise = complex(randn(size(data)),randn(size(data)));
-data = data+noise;
+data = data + noise;
 
 %% reconstruction (inverse transform)
-maxit = 10; % 0 or 1 for gridding, higher values for conjugate gradient
+maxit = 20; % 0 or 1 for gridding, higher values for conjugate gradient
 weight = []; % data weighting (optional)
 
 damp = 1e-2; % L2 penalty on ||x||
 im1 = obj.iNUFT(data,maxit,damp);
 
-partial = 1e2; % L2 penalty on ||imag(x))||
+partial = 0.3; % L2 penalty on ||imag(x))||
 im2 = obj.iNUFT(data,maxit,damp,weight,'phase-constraint',partial);
 
-cs = 1e-2; % L1 penalty on ||Q(x)|| (Q=wavelet transform)
-im3 = obj.iNUFT(data,maxit,damp,weight,'compressed-sensing',cs);
+sparsity = 0.6; % L1 penalty on ||Q(x)|| (Q=wavelet transform)
+im3 = obj.iNUFT(data,maxit,damp,weight,'compressed-sensing',sparsity);
 
 %% display
 subplot(2,2,1); imagesc(abs(im0(:,:,N/2+1)),[0 0.5]); colorbar; title('original');
