@@ -1,11 +1,11 @@
 classdef nufft_3d
-    
+    %obj = nufft_3d(om,N,varargin)
     % Non-uniform 3D fourier transform (based on Fessler NUFFT).
     % Note: trajectory units are phase cycles/fov which means the
     % Nyquist distance is 1 unit (Fessler's om is in radians/fov).
     %
     % If available, code uses gpuSparse class (single precision)
-    % or sparse on the GPU (double precision).
+    % or gpuArray sparse (double precision).
     %
     % Inputs:
     %  om = trajectory centered at 0 (unit = cycles/fov) [3 npts]
@@ -28,17 +28,17 @@ classdef nufft_3d
         u(1,1) double         = 2 % oversampling factor (2)
         N(3,1) int32 = zeros(3,1) % final image dimensions
         alpha(1,1) double     = 0 % kaiser-bessel parameter (0=Beatty optimal)
-        radial(1,1) logical   = 0 % radial kernel (1=yes 0=no)        
+        radial(1,1) logical   = 1 % radial kernel (1=yes 0=no)        
     end
     
     % behind the scenes parameters
     properties (SetAccess = private, Hidden = true)
         gpu(1,1) int32        = 1 % use GPU (0=no 1=gpuSparse 2=gpuArray)
-        low(1,1) double       = 1 % lowpass filter: h = exp(-(-low:low).^2/low)
+        low(1,1) double       = 2 % lowpass filter = exp(-(-low:low).^2/low)
         K(3,1) int32 = zeros(3,1) % oversampled image dimensions   
         d(:,1)                    % density weighting vector 
         H                         % sparse interpolation matrix
-        HT                        % transpose of H (stored separately on CPU)        
+        HT                        % H transpose (stored separately on CPU)        
         U(:,:,:)                  % deapodization matrix
     end
 
@@ -130,7 +130,6 @@ classdef nufft_3d
             fprintf('  %i points (out of %i) are out of bounds.\n',sum(~ok),numel(ok))
             
             %% set up interpolation matrix
-
             t = tic;
             
             % interpolation matrix
@@ -224,19 +223,20 @@ classdef nufft_3d
             if obj.gpu==0; obj.HT = obj.H'; end
 
             %% final steps
-   
+
             % deapodization matrix
             obj.U = obj.deap();
             
             % density weighting (default or user supplied)
-            [tmp obj.sd obj.dwsd] = obj.density(ok);
+            [d obj.sd obj.dwsd] = obj.density(ok);
+            
             if isempty(obj.d)
-                obj.d = tmp; % use the default calculated density
+                obj.d = d; % use the default calculated density
             else
-                if numel(tmp)~=numel(obj.d)
+                if numel(d)~=numel(obj.d)
                     error('supplied density has wrong number of elements (%i)',numel(obj.d));
                 end
-                obj.d = cast(reshape(obj.d,size(tmp)),'like',tmp);
+                obj.d = cast(reshape(obj.d,size(d)),'like',d);
                 obj.d(~ok) = 0; % exclude out of bounds points
             end
             
@@ -258,7 +258,7 @@ classdef nufft_3d
     %% utility functions - keep all the hacks in one place
     methods (Access = private, Hidden = true)
         
-        % sparse matrix vector multiply
+        %% sparse matrix vector multiply
         function y = spmv(obj,k)
             if isa(obj.H,'gpuSparse')
                 y = single(k);
@@ -273,7 +273,7 @@ classdef nufft_3d
             y = full(y);            
         end
         
-        % sparse transpose matrix vector multiply
+        %% sparse transpose matrix vector multiply
         function y = spmv_t(obj,k)
             if isa(obj.H,'gpuSparse')
                 y = single(k);
@@ -284,7 +284,7 @@ classdef nufft_3d
             y = full(y);
         end
         
-        % 3d fft with pre-fft padding (cartesian kspace <- cartesian image)
+        %% 3d fft with pre-fft padding (cartesian kspace <- cartesian image)
         function k = fft3_pad(obj,x)
             for j = 1:3
                 pad = size(x); pad(j) = (obj.K(j)-obj.N(j)) / 2;

@@ -105,6 +105,6 @@ end
 
 U = 1 ./ U;    
 
-if obj.gpu
+if obj.gpu==1
     U = gpuArray(single(U));
 end

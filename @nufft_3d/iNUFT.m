@@ -12,12 +12,12 @@ function im = iNUFT(obj,raw,maxit,damp,W,constraint,lambda)
 %              'compressed-sensing'
 %              'parallel-imaging-sake'
 %              'parallel-imaging-pruno'
-% -lambda [scalar]: regularization parameter (e.g. 0.5, 1e-3, 0, 0.5)
+% -lambda [scalar]: regularization parameter (e.g. 0.5, 0.33, 0, 0.5)
 %
 % The constraints can often produce slightly better images but require
 % tweaking of lambda. They are implemented as mutually exclusive options
-% for evaluation but actually they could be used simultaneously at great
-% computational cost and probably only marginal benefit.
+% for evaluation but could be used simultaneously at great computational
+% cost and probably marginal benefit.
 %
 %% argument checks
 
@@ -105,11 +105,14 @@ else
 end
 
 % send to gpu if needed
-if obj.gpu
-    W = gpuArray(W);
-    raw = gpuArray(single(raw));
-else
+if obj.gpu==0
     raw = double(gather(raw));
+elseif obj.gpu==1
+    W = gpuArray(single(W));
+    raw = gpuArray(single(raw));
+elseif obj.gpu==2
+    W = gpuArray(double(W));
+    raw = gpuArray(double(raw));   
 end
 
 %% iNUFT reconstruction: solve Ax=b
@@ -145,13 +148,13 @@ if ~isempty(constraint)
         
         % smoothing kernel (in image space)
         h = exp(-(-ceil(obj.low):ceil(obj.low)).^2/hypot(obj.low,eps));
-
+        
         % use regridding solution for phase
         P = reshape(x,obj.N(1),obj.N(2),obj.N(3),nc);
         P = circshift(P,fix(obj.N/2)); % mitigate edge effects (or use cconvn)
         P = convn(P,reshape(h,numel(h),1,1),'same');
         P = convn(P,reshape(h,1,numel(h),1),'same');
-        P = convn(P,reshape(h,1,1,numel(h)),'same');
+        %P = convn(P,reshape(h,1,1,numel(h)),'same');
         P = circshift(P,-fix(obj.N/2)); % shift back again
         P = exp(i*angle(P));
         
@@ -176,8 +179,8 @@ if ~isempty(constraint)
     % compressed sensing (wavelet)
     if isequal(constraint,'compressed-sensing')
         
-        % wrapper to dwt/idwt (any orthogonal choice)
-        Q = DWT(obj.N,'db2'); % Q=forward Q'=inverse
+        % Haar wavelet operator
+        Q = HWT(obj.N); % Q=forward Q'=inverse
         
         % rhs vector b = (QA'WDb)
         b = Q*obj.aNUFT((W.*obj.d).*raw);
@@ -185,11 +188,11 @@ if ~isempty(constraint)
         % correct shape for solver
         b = reshape(b,[],1);
         
-        % linear operator (QA'WDAQ')
+        % linear operator (QA'WDAQ')q
         A = @(q)reshape(Q*obj.iprojection(Q'*q,damp,W),[],1);
         
-        % solve (QA'WDAQ')(q) = (QA'WDb) + penalty on ||q||_1
-        q = pcgL1(A,b,lambda);
+        % solve (QA'WDAQ')q = (QA'WDb) + penalty on ||q||_1
+        [q,~] = pcgL1(A,b,lambda,[],maxit);
         
         % q in wavelet domain so x = Q' * q
         x = Q' * q;
