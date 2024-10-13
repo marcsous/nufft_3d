@@ -24,7 +24,7 @@ classdef nufft_3d
     
     % key parameters
     properties (SetAccess = private)
-        J(1,1) double         = 4  % kernel width (4)
+        J(1,1) double         = 5  % kernel width (4)
         u(1,1) double         = 2  % oversampling factor (2)
         N(1,3) double = zeros(1,3) % final image dimensions
         alpha(1,1) double     = 0  % kaiser-bessel parameter (0=Beatty optimal)

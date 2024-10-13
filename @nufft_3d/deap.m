@@ -28,14 +28,14 @@ end
 
 %% inverse Fourier transform of kernel (remove 2x oversampling)
 for j = 1:ndims(U)
-    U = ifft(U*sqrt(obj.K(j)),2*obj.K(j),j,'symmetric');
+    U = ifft(U*obj.K(j),2*obj.K(j),j,'symmetric');
     if j==1; U(1+obj.N(1)/2:end-obj.N(1)/2,:,:) = []; end
     if j==2; U(:,1+obj.N(2)/2:end-obj.N(2)/2,:) = []; end
     if j==3; U(:,:,1+obj.N(3)/2:end-obj.N(3)/2) = []; end
 end
 U = fftshift(U);
 
-%% analytical formulas for testing (3D only - ifft scaling not correct)
+%% analytical formulas for testing (3D only)
 if 0
     
     % analytical deapodization (kaiser bessel)
