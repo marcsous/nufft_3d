@@ -33,11 +33,12 @@ end
 % fNUFT/aNUFT similarly so that Q'Q and Q'DQ are both ~I.
 %
 %     Q = fft(eye(8))/sqrt(8);
+%     diag(Q'*Q) % [1.000 1.000 1.000 ...]
 %     D = diag(rand(8,1));
 %     diag(Q'*D*Q) % [0.6289 0.6289 0.6289 ...]
 %     mean(diag(D)) % 0.6289
 %
-% so normalize by the mean density
+% so normalize by the mean density to make diag(Q'DQ)=1
 d = d / (sum(d)/obj.nnz);
 
 % check true diagonals (T) of Q'*Q and Q'*D*Q (V. SLOW)

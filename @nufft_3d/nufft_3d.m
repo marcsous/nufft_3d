@@ -287,7 +287,7 @@ classdef nufft_3d
             for j = 1:3
                 pad = size(x); pad(j) = (obj.K(j)-obj.N(j)) / 2;
                 x = cat(j,zeros(pad,'like',x),x,zeros(pad,'like',x));
-                x = fft(fftshift(x,j),[],j) / sqrt(obj.K(j));
+                x = fft(fftshift(x,j),[],j);
             end
         end
 
@@ -295,7 +295,7 @@ classdef nufft_3d
         function k = ifft3_crop(obj,k)
             for j = 1:3
                 mid = (obj.K(j)-obj.N(j)) / 2;
-                k = ifftshift(ifft(k,[],j),j) * sqrt(obj.K(j));
+                k = ifftshift(ifft(k,[],j),j);
                 if j==1; k = k(1+mid:end-mid,:,:,:); end
                 if j==2; k = k(:,1+mid:end-mid,:,:); end
                 if j==3; k = k(:,:,1+mid:end-mid,:); end

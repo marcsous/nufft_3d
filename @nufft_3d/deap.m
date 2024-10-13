@@ -26,6 +26,8 @@ for dx = 0:obj.J
     end
 end
 
+sum(U(:))
+
 %% inverse Fourier transform of kernel (remove 2x oversampling)
 for j = 1:ndims(U)
     U = ifft(U*obj.K(j),2*obj.K(j),j,'symmetric');

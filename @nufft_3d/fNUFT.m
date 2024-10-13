@@ -6,4 +6,4 @@ k = k.*obj.U;
 k = obj.fft3_pad(k);
 k = reshape(k,size(obj.H,2),[]);
 k = obj.spmv(k);
-k = k*sqrt(prod(obj.K)/obj.nnz); % Q'Q~I
+k = k / sqrt(obj.nnz); % Q'Q~I
