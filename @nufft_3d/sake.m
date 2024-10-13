@@ -32,8 +32,7 @@ opts.noise = []; % noise std, if available
 opts.center = []; % center of kspace, if available
 opts.W = 1; % data weighting (same size as data)
 opts.damp = 0; % tikhonov damping term
-opts.sparsity = 1; % compressed sensing sparsity (1=off)
-opts.wname = 'db2'; % db1=piecewise constant db2=piecewise linear
+opts.sparsity = 0; % sparsity (0.1 = 10% zeros)
 
 % varargin handling (must be option/value pairs)
 for k = 1:2:numel(varargin)
@@ -89,8 +88,8 @@ opts.flip.y = circshift(ny:-1:1,[0 2*opts.center(2)-1]);
 opts.flip.z = circshift(nz:-1:1,[0 2*opts.center(3)-1]);
 
 % set up wavelet transform
-if opts.sparsity<1
-    Q = DWT([nx ny nz],opts.wname);
+if opts.sparsity
+    Q = DWT([nx ny nz]);
 end
 
 % approximate density of k-space sampling
@@ -111,11 +110,11 @@ for iter = 1:opts.maxit
     tmp = fft3(tmp);
     ksp = ksp - tmp;
     
-    % threshold image in wavelet domain
-    if opts.sparsity<1
-        ksp = ifft3(ksp);
+    % threshold in wavelet domain
+    if opts.sparsity
+        ksp = ifft3(ksp); % to image
         ksp = Q.thresh(ksp,opts.sparsity);
-        ksp = fft3(ksp);
+        ksp = fft3(ksp); % to kspace
     end
     
     % normal calibration matrix

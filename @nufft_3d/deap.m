@@ -1,29 +1,25 @@
 %% deapodization matrix 
 function U = deap(obj)
 
-%% convolution kernel (2x oversampling)
-
-if obj.N(3)==1
-    U = zeros(ceil([obj.J obj.J]+1));
-else
-    U = zeros(ceil([obj.J obj.J obj.J]+1));
-end
-
-for ix = 1:size(U,1)
-    for iy = 1:size(U,2)
-        for iz = 1:size(U,3)
+%% convolution kernel (with 2x oversampling)
+for dx = 0:obj.J
+    for dy = 0:obj.J
+        for dz = 0:obj.J
             
-            % distance (squared) in 1/2 increments
-            dx2 = (ix-1)^2 / 4;
-            dy2 = (iy-1)^2 / 4;
-            dz2 = (iz-1)^2 / 4;
+            % allow for 2D case
+            if obj.N(3)==1 && dz~=0; continue; end
+
+            % distance in 1/2 increments, squared
+            dx2 = (dx/2)^2;
+            dy2 = (dy/2)^2;
+            dz2 = (dz/2)^2;
             dist2 = dx2 + dy2 + dz2;
             
             % kernel values - don't truncate for accuracy
             if obj.radial
-                U(ix,iy,iz) = obj.kernel(dist2);
+                U(1+dx,1+dy,1+dz) = obj.kernel(dist2);
             else
-                U(ix,iy,iz) = obj.kernel(dx2).*obj.kernel(dy2).*obj.kernel(dz2);
+                U(1+dx,1+dy,1+dz) = obj.kernel(dx2).*obj.kernel(dy2).*obj.kernel(dz2);
             end
             
         end
@@ -31,21 +27,19 @@ for ix = 1:size(U,1)
 end
 
 %% inverse Fourier transform of kernel (remove 2x oversampling)
-
-for j = 1:2+(obj.N(3)>1)
-    U = ifft(U*double(obj.K(j)),2*obj.K(j),j,'symmetric');
+for j = 1:ndims(U)
+    U = ifft(U*sqrt(obj.K(j)),2*obj.K(j),j,'symmetric');
     if j==1; U(1+obj.N(1)/2:end-obj.N(1)/2,:,:) = []; end
     if j==2; U(:,1+obj.N(2)/2:end-obj.N(2)/2,:) = []; end
     if j==3; U(:,:,1+obj.N(3)/2:end-obj.N(3)/2) = []; end
 end
 U = fftshift(U);
 
-%% analytical formulas for testing
-
+%% analytical formulas for testing (3D only - ifft scaling not correct)
 if 0
     
     % analytical deapodization (kaiser bessel)
-    U = zeros(obj.N');
+    U = zeros(obj.N);
     
     % analytical deapodization (Lewitt, J Opt Soc Am A 1990;7:1834)
     if 0
@@ -59,7 +53,7 @@ if 0
         y = ((1:obj.N(2))-obj.N(2)/2-1)./obj.K(2);
         z = ((1:obj.N(3))-obj.N(3)/2-1)./obj.K(3);
     end
-    if obj.N(3)==1; z=0; end
+
     [x y z] = ndgrid(x,y,z);
     
     if obj.radial
@@ -90,21 +84,21 @@ if 0
         sigma = realsqrt((2*pi*a*y(~k)).^2 - obj.alpha.^2);
         U(~k) = C * (sin(sigma)./sigma) .* U(~k);
     
-        if obj.N(3)>1
-            k = 2*pi*a*abs(z) < obj.alpha;
-            sigma = realsqrt(obj.alpha.^2 - (2*pi*a*z(k)).^2);
-            U(k) = C * (sinh(sigma)./sigma) .* U(k);
-            sigma = realsqrt((2*pi*a*z(~k)).^2 - obj.alpha.^2);
-            U(~k) = C * (sin(sigma)./sigma) .* U(~k);
-        end
+        k = 2*pi*a*abs(z) < obj.alpha;
+        sigma = realsqrt(obj.alpha.^2 - (2*pi*a*z(k)).^2);
+        U(k) = C * (sinh(sigma)./sigma) .* U(k);
+        sigma = realsqrt((2*pi*a*z(~k)).^2 - obj.alpha.^2);
+        U(~k) = C * (sin(sigma)./sigma) .* U(~k);
+
     end
   
 end
 
 %% convert to a deconvolution
-
 U = 1 ./ U;    
 
 if obj.gpu==1
     U = gpuArray(single(U));
+elseif obj.gpu==2
+    U = gpuArray(double(U));
 end

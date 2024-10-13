@@ -1,8 +1,8 @@
 classdef nufft_3d
     %obj = nufft_3d(om,N,varargin)
     % Non-uniform 3D fourier transform (based on Fessler NUFFT).
-    % Note: trajectory units are phase cycles/fov which means the
-    % Nyquist distance is 1 unit (Fessler's om is in radians/fov).
+    % Note: trajectory units are phase cycles/fov so the Nyquist
+    % distance is 1 unit (Fessler's om is in radians/fov).
     %
     % If available, code uses gpuSparse class (single precision)
     % or gpuArray sparse (double precision).
@@ -24,28 +24,26 @@ classdef nufft_3d
     
     % key parameters
     properties (SetAccess = private)
-        J(1,1) double         = 4 % kernel width (4)
-        u(1,1) double         = 2 % oversampling factor (2)
-        N(3,1) int32 = zeros(3,1) % final image dimensions
-        alpha(1,1) double     = 0 % kaiser-bessel parameter (0=Beatty optimal)
-        radial(1,1) logical   = 1 % radial kernel (1=yes 0=no)        
+        J(1,1) double         = 4  % kernel width (4)
+        u(1,1) double         = 2  % oversampling factor (2)
+        N(1,3) double = zeros(1,3) % final image dimensions
+        alpha(1,1) double     = 0  % kaiser-bessel parameter (0=Beatty optimal)
+        radial(1,1) logical   = 1  % radial kernel (1=yes 0=no)        
     end
     
     % behind the scenes parameters
-    properties (SetAccess = private, Hidden = true)
-        gpu(1,1) int32        = 1 % use GPU (0=no 1=gpuSparse 2=gpuArray)
-        low(1,1) double       = 2 % lowpass filter = exp(-(-low:low).^2/low)
-        K(3,1) int32 = zeros(3,1) % oversampled image dimensions   
-        d(:,1)                    % density weighting vector 
-        H                         % sparse interpolation matrix
-        HT                        % H transpose (stored separately on CPU)        
-        U(:,:,:)                  % deapodization matrix
+    properties (SetAccess = private)
+        gpu(1,1) double     = 1    % use GPU (0=no 1=gpuSparse 2=gpuArray)
+        K(1,3) double = zeros(1,3) % oversampled image dimensions
+        H(:,:)                     % sparse interpolation matrix
+        HT(:,:)                    % H transpose (stored separately on CPU)        
+        U(:,:,:)                   % deapodization matrix
+        d(:,1)                     % density weighting
+        nnz(1,1) double     = 0    % no. points within bounds
     end
 
     % experimental parameters
     properties (SetAccess = private, Hidden = true)
-        sd                         % the mean sample density in kspace
-        dwsd                       % the mean density weighed sample density
         fnull                      % forward nullspace for pruno
         anull                      % adjunct nullspace for pruno
     end
@@ -55,6 +53,7 @@ classdef nufft_3d
         %% constructor
         function obj = nufft_3d(om,N,varargin)
 
+            %% handle varargin
             if nargin==0
                 return; % default constructor required by MATLAB
             end 
@@ -80,64 +79,62 @@ classdef nufft_3d
             if obj.J<1 || obj.J>7
                 warning('value of J=%f is not recommended',obj.J);
             end
-            if obj.u<=1 || obj.u>6 % doesn't work properly with u=1
+            if obj.u<1 || obj.u>6 % doesn't work properly with u=1
                 error('value of u=%f is not recommended',obj.u);
             end
             if obj.alpha==0
                 % Beatty formula
-                obj.alpha = pi*realsqrt(obj.J^2*(1-0.5/obj.u)^2-0.8);
+                obj.alpha = pi*sqrt(obj.J^2*(1-0.5/obj.u)^2-0.8);
                 if obj.radial
-                    % with radial, it seems better with a linear term in u
-                    obj.alpha = pi*realsqrt(obj.J^2*(1-0.5/obj.u)^2-0.6*obj.u); 
+                    % with radial, seems better with a linear term in u
+                    obj.alpha = pi*sqrt(obj.J^2*(1-0.5/obj.u)^2-0.6*obj.u); 
                 end
             end
             if obj.radial && (obj.J<3 || obj.u<1.5)
                 warning('radial kernel not recommended with J<3 or u<1.5');
             end
-            if ~isscalar(obj.low) || obj.low<0
-                error('low must be a nonnegative scalar');
-            end
             if (numel(N)==1 || numel(N)==3) && isnumeric(N)
-                obj.N = ones(3,1).*reshape(N,[],1); N = [];
+                obj.N = ones(1,3).*reshape(N,[],1); N = [];
             else
                 error('N must be scalar or 3-vector of even integers');
             end
-            if mod(obj.N(1),2) || mod(obj.N(2),2) % allow z=1 for 2D
+            if all(obj.N==0) || mod(obj.N(1),2) || mod(obj.N(2),2) % allow z=1 for 2D
                 error('N must be an even integer');
             end
             if all(om(3,:)==0) % catch z=1 case for 2D
                 obj.N(3) = 1;
             end
             
-            % oversampled matrix size (must be even & int32 limited to 1280^3)
-            obj.K = 2 * (obj.N * obj.u / 2);
-            if obj.N(3) == 1; obj.K(3) = 1; end
-            if prod(obj.K)>=intmax('int32'); error('N or u too large for int32'); end
+            % oversampled matrix size (must be even and limited to 1280^3)
+            obj.K = 2 * ceil(obj.N * obj.u / 2);
+            if obj.N(3)==1; obj.K(3) = 1; end
+            if prod(obj.K)>=intmax('int32'); error('N or u too large'); end
             
-            % display trajectory limits
+            %% handle trajectory
             disp(' Trajectory:     min       max       matrix')
             fprintf('  om(1): %12.3f %9.3f %9i\n',min(om(1,:)),max(om(1,:)),obj.N(1))
             fprintf('  om(2): %12.3f %9.3f %9i\n',min(om(2,:)),max(om(2,:)),obj.N(2))           
             fprintf('  om(3): %12.3f %9.3f %9i\n',min(om(3,:)),max(om(3,:)),obj.N(3))
             
-            % scale trajectory
+            % scale to oversampled matrix size
             om = obj.u * single(om);
 
             % only keep points that are within bounds
             ok = om(1,:) >= -obj.K(1)/2 & om(1,:) <= obj.K(1)/2-1;
             ok = om(2,:) >= -obj.K(2)/2 & om(2,:) <= obj.K(2)/2-1 & ok;
-            ok = om(3,:) >= -obj.K(3)/2 & om(3,:) <= obj.K(3)/2-1 & ok;
-            fprintf('  %i points (out of %i) are out of bounds.\n',sum(~ok),numel(ok))
+            ok = om(3,:) >= -obj.K(3)/2 & om(3,:) <= obj.K(3)/2-1 & ok | obj.N(3)==1;
+            obj.nnz = sum(ok);
+            fprintf('  %i points (out of %i) are within bounds.\n',obj.nnz,numel(ok))
             
             %% set up interpolation matrix
             t = tic;
             
-            % interpolation matrix
-            nrow = numel(ok);
+            % size
+            nrow = numel(ok);            
             ncol = prod(obj.K);
             obj.H = sparse(nrow,ncol);
             
-            % push to gpu if needed (try/catch fallback to cpu)
+            % send to gpu (try/catch fallback to gpuArray then cpu)
             if obj.gpu
                 try
                     if obj.gpu==1; obj.H = gpuSparse(obj.H); end
@@ -157,21 +154,21 @@ classdef nufft_3d
             range = -ceil(obj.J/2):ceil(obj.J/2);
             
             % create sparse matrix - assemble in parts (lower memory requirement)
-            for ix = range
-                for iy = range
+            for dx = range
+                for dy = range
                     
                     % work in 32-bit to reduce memory use
                     I = int32([]); J = int32([]); S = single([]); 
                                     
-                    for iz = range
+                    for dz = range
                         
-                        % to allow 2d
-                        if obj.N(3)==1 && iz~=0; continue; end
+                        % allow for 2d case
+                        if obj.N(3)==1 && dz~=0; continue; end
                         
-                        % neighboring grid points (keep ix,iy,iz outside for consistent rounding)
-                        x = int32(om(1,:)) + ix;
-                        y = int32(om(2,:)) + iy;
-                        z = int32(om(3,:)) + iz;
+                        % neighboring grid points (keep dx,dy,dz outside for consistent rounding)
+                        x = int32(om(1,:)) + dx;
+                        y = int32(om(2,:)) + dy;
+                        z = int32(om(3,:)) + dz;
                         
                         % distance (squared) from the samples
                         dx2 = (single(x)-om(1,:)).^2;
@@ -226,18 +223,19 @@ classdef nufft_3d
 
             % deapodization matrix
             obj.U = obj.deap();
-            
+
             % density weighting (default or user supplied)
-            [d obj.sd obj.dwsd] = obj.density(ok);
-            
             if isempty(obj.d)
-                obj.d = d; % use the default calculated density
+                obj.d = obj.density(ok);
             else
-                if numel(d)~=numel(obj.d)
-                    error('supplied density has wrong number of elements (%i)',numel(obj.d));
+                if numel(obj.d)~=nrow
+                    error('supplied density has wrong number of elements (should be %i)',nrow);
                 end
-                obj.d = cast(reshape(obj.d,size(d)),'like',d);
+                obj.d = cast(reshape(obj.d,[],1),'like',obj.U);
                 obj.d(~ok) = 0; % exclude out of bounds points
+                if mean(obj.d)~=1
+                    warning('mean(density) should be 1 (%f)',mean(obj.d));
+                end
             end
             
             % we are going to do a lot of ffts of the same type so tune it
@@ -285,38 +283,30 @@ classdef nufft_3d
         end
         
         %% 3d fft with pre-fft padding (cartesian kspace <- cartesian image)
-        function k = fft3_pad(obj,x)
+        function x = fft3_pad(obj,x)
             for j = 1:3
                 pad = size(x); pad(j) = (obj.K(j)-obj.N(j)) / 2;
                 x = cat(j,zeros(pad,'like',x),x,zeros(pad,'like',x));
-                %if pad(j)>0
-                %    % in the padded matrix, should the end-points should share the energy?
-                %    if j==1; x(end-pad(j)+1,:,:,:) = x(end-pad(j)+1,:,:,:)/2; x(pad(j),:,:,:) = x(end-pad(j)+1,:,:,:); end
-                %    if j==2; x(:,end-pad(j)+1,:,:) = x(:,end-pad(j)+1,:,:)/2; x(:,pad(j),:,:) = x(:,end-pad(j)+1,:,:); end
-                %    if j==3; x(:,:,end-pad(j)+1,:) = x(:,:,end-pad(j)+1,:)/2; x(:,:,pad(j),:) = x(:,:,end-pad(j)+1,:); end
-                %end
-                x = fft(fftshift(x,j),[],j); 
+                x = fft(fftshift(x,j),[],j) / sqrt(obj.K(j));
             end
-            k = x; % output is kspace
         end
 
         %% 3d ifft with post-ifft cropping (cartesian image <- cartesian kspace)
-        function x = ifft3_crop(obj,k)
+        function k = ifft3_crop(obj,k)
             for j = 1:3
                 mid = (obj.K(j)-obj.N(j)) / 2;
-                k = ifftshift(ifft(k,[],j),j); 
+                k = ifftshift(ifft(k,[],j),j) * sqrt(obj.K(j));
                 if j==1; k = k(1+mid:end-mid,:,:,:); end
                 if j==2; k = k(:,1+mid:end-mid,:,:); end
                 if j==3; k = k(:,:,1+mid:end-mid,:); end
             end
-            x = k * (prod(obj.K) / prod(obj.N)); % scaling (1/N not 1/K)
         end
         
         %% image projection operator (image <- image)
         function y = iprojection(obj,x,damp,W)
-            % y = A' * W * D * A * x + penalty on ||x||
+            % y = A' * W * A * x + penalty on ||x||
             y = obj.fNUFT(x);
-            y = (W.*obj.d).*y; % density weighting included
+            y = W.*y;
             y = obj.aNUFT(y);
             x = reshape(x,size(y));
             y = y + damp.^2.*x;
@@ -334,7 +324,7 @@ classdef nufft_3d
         
         %% phase constrained projection operator (image <- image)
         function y = pprojection(obj,x,damp,lambda,W,P)
-            % y = P' * A' * W * D * A * P * x + penalty on ||imag(x)||
+            % y = P' * A' * W * A * P * x + penalty on ||imag(x)||
             P = reshape(P,size(x));
             y = P.*x;
             y = obj.iprojection(y,damp,W);

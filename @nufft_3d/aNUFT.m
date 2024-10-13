@@ -6,3 +6,4 @@ x = obj.spmv_t(x);
 x = reshape(x,obj.K(1),obj.K(2),obj.K(3),[]);
 x = obj.ifft3_crop(x);
 x = x.*obj.U;
+x = x/sqrt(obj.nnz); % ensure Q'Q~I

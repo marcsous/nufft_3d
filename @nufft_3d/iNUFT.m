@@ -3,9 +3,9 @@ function im = iNUFT(obj,raw,maxit,damp,W,constraint,lambda)
 %im = iNUFT(obj,raw,maxit,damp,W,constraint,lambda)
 %
 % -raw: complex raw kspace data [nr nc] or [nr ny nc]
-% -maxit [scalar]: no. iterations (use 0 or 1 for regridding)
-% -damp [scalar]: Tikhonov regularization (only when maxit>1)
-% -W [scalar, ny or nr*ny]: weighting (only when maxit>1)
+% -maxit [scalar]: no. iterations (0 or 1 for regridding)
+% -damp [scalar]: Tikhonov L2 regularization parameter
+% -W [scalar, ny or nr*ny]: weighting (maxit>1)
 %
 % Experimental options
 % -constraint: 'phase-constraint'
@@ -36,11 +36,14 @@ else
     nc = size(raw,3);
     fprintf('  %s received raw data: nr=%i ny=%i nc=%i\n',mfilename,nr,ny,nc);
 end
-raw = reshape(raw,nrow,nc);
+raw = reshape(raw,nrow,nc,[]);
+if size(raw,3)>1
+    error('raw data size [%s] seems to have too many dimensions',num2str(size(raw)));
+end
 
 % optional argument checks
 if ~exist('maxit','var') || isempty(maxit)
-    maxit = 10; % default to iterative
+    maxit = 20; % default to iterative
 else
     validateattributes(maxit,{'numeric'},{'scalar','finite','integer','nonnegative'},'','maxit');
 end
@@ -50,7 +53,9 @@ else
     validateattributes(damp,{'numeric'},{'scalar','finite','nonnegative'},'','damp');
 end
 if ~exist('W','var') || isscalar(W) || isempty(W)
-    W = 1;
+    W = obj.d;
+elseif maxit<=1
+    warning('weighting is only effective when maxit>1');
 else
     if numel(W)~=nrow
         if ~exist('ny','var')
@@ -64,13 +69,13 @@ else
         end
         W = repmat(reshape(W,1,ny),nr,1);
     end
-    W = reshape(W,nrow,1);
-    if numel(unique(W))==1; W = W(1); end
-    if ~any(W); error('W cannot be all zero'); end
+    W = reshape(W,nrow,1).*obj.d;
     validateattributes(W,{'numeric','gpuArray'},{'finite','nonnegative'},'','W');
 end
 if ~exist('constraint','var') || isempty(constraint)
     constraint = '';
+elseif maxit<=1
+    warning('phase constraint is only effective when maxit>1');
 else
     switch constraint
         case 'phase-constraint';
@@ -85,24 +90,7 @@ else
     validateattributes(lambda,{'numeric'},{'scalar','finite','nonnegative'},'','lambda');
 end
 
-% damp, weighting and constraints require iterative recon
-if damp~=0 && maxit<=1
-    warning('damp is only effective when maxit>1 - try 10');
-end
-if ~isscalar(W) && maxit<=1
-    warning('weighting is only effective when maxit>1 - try 10');
-end
-if ~isempty(constraint) && lambda && maxit<=1
-    warning('phase constraint is only effective when maxit>1 - try 10');
-end
-
 %% finalize setup
-fprintf('  maxit=%i damp=%.3f weighted=%i',maxit,damp,~isscalar(W));
-if isempty(constraint)
-    fprintf('\n')
-else
-    fprintf(' (%s lambda=%.3f)\n',constraint,lambda);
-end
 
 % send to gpu if needed
 if obj.gpu==0
@@ -115,28 +103,38 @@ elseif obj.gpu==2
     raw = gpuArray(double(raw));   
 end
 
+fprintf('  maxit=%i damp=%.2e',maxit,damp);
+if isempty(constraint)
+    fprintf('\n')
+else
+    fprintf(' (%s lambda=%.3f)\n',constraint,lambda);
+end
+
+% fitting tolerance
+tol = 1e-4;
+
 %% iNUFT reconstruction: solve Ax=b
 tic;
 
 if maxit==0
-    
-    % regridding x = A'Db
-    x = obj.aNUFT(obj.d.*raw);
-    
+
+    % classic regridding
+    x = obj.aNUFT(W.*raw);
+
 else
-    
-    % linear operator (A'WDA)
+
+    % linear operator (A'WA)
     A = @(x)obj.iprojection(x,damp,W);
-    
-    % rhs vector b = (A'WDb)
-    b = obj.aNUFT((W.*obj.d).*raw);
+
+    % rhs vector b = (A'Wb)
+    b = obj.aNUFT(W.*raw);
 
     % correct shape for solver
     b = reshape(b,prod(obj.N),nc);
-    
-    % solve (A'WDA)(x) = (A'WDb) + penalty on ||x||
-    [x,~,relres,iter] = pcgpc(A,b,[],maxit);
-    
+
+    % solve (AWA)x = AWb with penalty on ||x||
+    [x,~] = minres(A,b,tol,maxit);
+
 end
 
 %% experimental options
@@ -146,30 +144,23 @@ if ~isempty(constraint)
     % phase constrained least squares
     if isequal(constraint,'phase-constraint')
         
-        % smoothing kernel (in image space)
-        h = exp(-(-ceil(obj.low):ceil(obj.low)).^2/hypot(obj.low,eps));
-        
-        % use regridding solution for phase
-        P = reshape(x,obj.N(1),obj.N(2),obj.N(3),nc);
-        P = circshift(P,fix(obj.N/2)); % mitigate edge effects (or use cconvn)
-        P = convn(P,reshape(h,numel(h),1,1),'same');
-        P = convn(P,reshape(h,1,numel(h),1),'same');
-        %P = convn(P,reshape(h,1,1,numel(h)),'same');
-        P = circshift(P,-fix(obj.N/2)); % shift back again
+        % smooth phase (from previous solution)
+        P = reshape(x,obj.N);
+        P = convn(P,ones(3),'same');
         P = exp(i*angle(P));
         
-        % linear operator (P'A'WDAP)
+        % linear operator (P'A'WAP)
         A = @(x)obj.pprojection(x,damp,lambda,W,P);
         
-        % rhs vector b = (P'A'WDb)
-        b = conj(P).*obj.aNUFT((W.*obj.d).*raw);
+        % rhs vector b = (P'A'Wb)
+        b = conj(P).*obj.aNUFT(W.*raw);
         
         % correct shape for solver
         P = reshape(P,prod(obj.N),nc);
         b = reshape(b,prod(obj.N),nc);
         
-        % solve (P'A'WDAP)(P'x) = (P'A'WDb) + penalty on imag(P'x)
-        [x,~,relres,iter] = pcgpc(A,b,[],maxit);
+        % solve (P'A'WAP)(P'x) = (P'A'Wb) with penalty on ||imag(P'x)||
+        [x,~] = pcgpc(A,b,tol,maxit);
         
         % put back the low resolution phase
         x = P.*x;
@@ -179,24 +170,22 @@ if ~isempty(constraint)
     % compressed sensing (wavelet)
     if isequal(constraint,'compressed-sensing')
         
-        % Haar wavelet operator
-        Q = HWT(obj.N); % Q=forward Q'=inverse
+        % wavelet operator
+        Q = HWT(obj.N);
         
-        % rhs vector b = (QA'WDb)
-        b = Q*obj.aNUFT((W.*obj.d).*raw);
+        % rhs vector b = (A'Wb)
+        b = obj.aNUFT(W.*raw);
         
         % correct shape for solver
         b = reshape(b,[],1);
         
-        % linear operator (QA'WDAQ')q
-        A = @(q)reshape(Q*obj.iprojection(Q'*q,damp,W),[],1);
+        % linear operator (A'WA)
+        A = @(x)reshape(obj.iprojection(x,damp,W),[],1);
         
-        % solve (QA'WDAQ')q = (QA'WDb) + penalty on ||q||_1
-        [q,~] = pcgL1(A,b,lambda,[],maxit);
-        
-        % q in wavelet domain so x = Q' * q
-        x = Q' * q;
-        
+        % solve (A'WA)x = (A'Wb) with penalty on ||Qx||_1
+        %[x,~] = pcgL1(A,b,lambda,tol,maxit,Q);
+        x = fistaN(A,b,lambda,tol,maxit,Q);
+       
     end
     
     % parallel imaging (sake low rank)
@@ -218,31 +207,15 @@ if ~isempty(constraint)
         obj.fnull = obj.pruno(x) * lambda;
         obj.anull = conj(obj.fnull);
         
-        % correct RHS for solver
-        b = obj.aNUFT((W.*obj.d).*raw);
+        % rhs vector b = (A'Wb)
+        b = obj.aNUFT(W.*raw);
+
+        % correct shape for solver
         b = reshape(b,[],1);
-        
-        % in Cartesian the diagonal of iprojection is the mean of
-        % the sample weighting squared (used as a preconditioner)
-        D = obj.dwsd + damp^2 + real(sum(obj.anull.*obj.fnull,5));
-        M = @(x) x./reshape(D,size(x)); % diagonal preconditioner -
-        
-        % check: measure diagonal of iprojection (V. SLOW)
-        if 0
-            N = 200; % how many to test
-            d = zeros(1,N,'like',D);
-            for j = 1:N
-                tmp = zeros(size(D));
-                tmp(j) = 1; tmp = obj.iprojection(tmp,damp,W);
-                d(j) = real(tmp(j)); fprintf('%i/%i\n',j,N);
-            end
-            plot([d;D(1:N);d-D(1:N)]'); legend({'exact','estimate','diff'});
-            keyboard
-        end
-        
-        % least squares (A'WA)(x) = (A'Wb) + penalty on ||null*x||
+
+        % least squares (A'WA)(x) = (A'Wb) with penalty on ||null*x||
         iters = 100; % need about 100
-        x = pcgpc(@(x)obj.iprojection(x,damp,W),b,[],iters,M);
+        [x,~] = minres(@(x)obj.iprojection(x,damp,W),b,tol,iters,M);
         
     end
     
