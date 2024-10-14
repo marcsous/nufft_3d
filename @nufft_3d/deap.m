@@ -26,8 +26,6 @@ for dx = 0:obj.J
     end
 end
 
-sum(U(:))
-
 %% inverse Fourier transform of kernel (remove 2x oversampling)
 for j = 1:ndims(U)
     U = ifft(U*obj.K(j),2*obj.K(j),j,'symmetric');
@@ -40,10 +38,9 @@ U = fftshift(U);
 %% analytical formulas for testing (3D only)
 if 0
     
-    % analytical deapodization (kaiser bessel)
+    % analytical kaiser bessel (Lewitt, J Opt Soc Am A 1990;7:1834)
     U = zeros(obj.N);
-    
-    % analytical deapodization (Lewitt, J Opt Soc Am A 1990;7:1834)
+
     if 0
         % centered: do not use, requires centered fftshifts, no advantage in accuracy
         x = ((1:obj.N(1))-obj.N(1)/2-0.5)./obj.K(1);
@@ -55,6 +52,7 @@ if 0
         y = ((1:obj.N(2))-obj.N(2)/2-1)./obj.K(2);
         z = ((1:obj.N(3))-obj.N(3)/2-1)./obj.K(3);
     end
+    if obj.N(3)==1; z(:) = 0; end
 
     [x y z] = ndgrid(x,y,z);
     
@@ -85,15 +83,15 @@ if 0
         U(k) = C * (sinh(sigma)./sigma) .* U(k);
         sigma = realsqrt((2*pi*a*y(~k)).^2 - obj.alpha.^2);
         U(~k) = C * (sin(sigma)./sigma) .* U(~k);
-    
+        if obj.N(3)>1
         k = 2*pi*a*abs(z) < obj.alpha;
         sigma = realsqrt(obj.alpha.^2 - (2*pi*a*z(k)).^2);
         U(k) = C * (sinh(sigma)./sigma) .* U(k);
         sigma = realsqrt((2*pi*a*z(~k)).^2 - obj.alpha.^2);
         U(~k) = C * (sin(sigma)./sigma) .* U(~k);
-
+        end
     end
-  
+
 end
 
 %% convert to a deconvolution

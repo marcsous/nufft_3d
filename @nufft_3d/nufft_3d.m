@@ -24,7 +24,7 @@ classdef nufft_3d
     
     % key parameters
     properties (SetAccess = private)
-        J(1,1) double         = 5  % kernel width (4)
+        J(1,1) double         = 4  % kernel width (4)
         u(1,1) double         = 2  % oversampling factor (2)
         N(1,3) double = zeros(1,3) % final image dimensions
         alpha(1,1) double     = 0  % kaiser-bessel parameter (0=Beatty optimal)
@@ -39,7 +39,7 @@ classdef nufft_3d
         HT(:,:)                    % H transpose (stored separately on CPU)        
         U(:,:,:)                   % deapodization matrix
         d(:,1)                     % density weighting
-        nnz(1,1) double     = 0    % no. points within bounds
+        nnz(1,1) double     = 0    % number of sample points within bounds
     end
 
     % experimental parameters
@@ -105,7 +105,7 @@ classdef nufft_3d
                 obj.N(3) = 1;
             end
             
-            % oversampled matrix size (must be even and limited to 1280^3)
+            % oversampled matrix size (must be even and limited to ~1280^3)
             obj.K = 2 * ceil(obj.N * obj.u / 2);
             if obj.N(3)==1; obj.K(3) = 1; end
             if prod(obj.K)>=intmax('int32'); error('N or u too large'); end
@@ -116,14 +116,14 @@ classdef nufft_3d
             fprintf('  om(2): %12.3f %9.3f %9i\n',min(om(2,:)),max(om(2,:)),obj.N(2))           
             fprintf('  om(3): %12.3f %9.3f %9i\n',min(om(3,:)),max(om(3,:)),obj.N(3))
             
-            % scale to oversampled matrix size
-            om = obj.u * single(om);
+            % scale to oversampled matrix size (double to avoid flintmax('single') limit)
+            om = obj.u * double(om);
 
             % only keep points that are within bounds
             ok = om(1,:) >= -obj.K(1)/2 & om(1,:) <= obj.K(1)/2-1;
             ok = om(2,:) >= -obj.K(2)/2 & om(2,:) <= obj.K(2)/2-1 & ok;
             ok = om(3,:) >= -obj.K(3)/2 & om(3,:) <= obj.K(3)/2-1 & ok | obj.N(3)==1;
-            obj.nnz = sum(ok);
+            obj.nnz = nnz(ok);
             fprintf('  %i points (out of %i) are within bounds.\n',obj.nnz,numel(ok))
             
             %% set up interpolation matrix
@@ -134,7 +134,7 @@ classdef nufft_3d
             ncol = prod(obj.K);
             obj.H = sparse(nrow,ncol);
             
-            % send to gpu (try/catch fallback to gpuArray then cpu)
+            % send to gpu (try/catch fallback to gpuArray, then cpu)
             if obj.gpu
                 try
                     if obj.gpu==1; obj.H = gpuSparse(obj.H); end
@@ -153,11 +153,10 @@ classdef nufft_3d
             % overkill to include endpoints
             range = -ceil(obj.J/2):ceil(obj.J/2);
             
-            % create sparse matrix - assemble in parts (lower memory requirement)
+            % create sparse matrix - assemble in parts in 32-bit (lower memory requirement)
             for dx = range
                 for dy = range
                     
-                    % work in 32-bit to reduce memory use
                     I = int32([]); J = int32([]); S = single([]); 
                                     
                     for dz = range
@@ -166,14 +165,14 @@ classdef nufft_3d
                         if obj.N(3)==1 && dz~=0; continue; end
                         
                         % neighboring grid points (keep dx,dy,dz outside for consistent rounding)
-                        x = int32(om(1,:)) + dx;
-                        y = int32(om(2,:)) + dy;
-                        z = int32(om(3,:)) + dz;
+                        x = round(om(1,:)) + dx;
+                        y = round(om(2,:)) + dy;
+                        z = round(om(3,:)) + dz;
                         
                         % distance (squared) from the samples
-                        dx2 = (single(x)-om(1,:)).^2;
-                        dy2 = (single(y)-om(2,:)).^2;
-                        dz2 = (single(z)-om(3,:)).^2;
+                        dx2 = (x-om(1,:)).^2;
+                        dy2 = (y-om(2,:)).^2;
+                        dz2 = (z-om(3,:)).^2;
                         
                         % wrap negatives (kspace centered at 0)
                         x = mod(x,obj.K(1));
@@ -203,7 +202,7 @@ classdef nufft_3d
                     if isa(obj.H,'gpuSparse')
                         obj.H = obj.H + gpuSparse(I,J,S,nrow,ncol);
                     else
-                        S = double(S); % sparse only accepts doubles
+                        S = double(S); % sparse only accepts double values
                         if verLessThan('matlab','9.8'); I = double(I); end
                         if verLessThan('matlab','9.8'); J = double(J); end
                         obj.H = obj.H + sparse(I,J,S,nrow,ncol);
@@ -295,7 +294,7 @@ classdef nufft_3d
         function k = ifft3_crop(obj,k)
             for j = 1:3
                 mid = (obj.K(j)-obj.N(j)) / 2;
-                k = ifftshift(ifft(k,[],j),j);
+                k = ifftshift(ifft(k,[],j),j) * obj.K(j);
                 if j==1; k = k(1+mid:end-mid,:,:,:); end
                 if j==2; k = k(:,1+mid:end-mid,:,:); end
                 if j==3; k = k(:,:,1+mid:end-mid,:); end

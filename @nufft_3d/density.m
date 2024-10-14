@@ -38,7 +38,7 @@ end
 %     diag(Q'*D*Q) % [0.6289 0.6289 0.6289 ...]
 %     mean(diag(D)) % 0.6289
 %
-% so normalize by the mean density to make diag(Q'DQ)=1
+% normalize by the mean density so that diag(Q'DQ)=1
 d = d / (sum(d)/obj.nnz);
 
 % check true diagonals (T) of Q'*Q and Q'*D*Q (V. SLOW)
@@ -71,10 +71,10 @@ if false
     % power method (largest eigenvalue of QQ and QDQ)
     tmp1 = randn(obj.N)+i*randn(obj.N);
     tmp2 = randn(obj.N)+i*randn(obj.N);
-    for k = 1:30
+    for k = 1:50
         tmp1 = QQ (tmp1/norm(tmp1(:)));
         tmp2 = QDQ(tmp2/norm(tmp2(:)));
-        fprintf('%.3e %.3e\n',norm(tmp1(:)),norm(tmp2(:)));
+        fprintf('%f %f\n',norm(tmp1(:)),norm(tmp2(:)));
     end
     s1 = norm(tmp1(:));
     v1 = tmp1(:)/s1;
