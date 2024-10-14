@@ -46,9 +46,8 @@ if 1
 else
 
     % Cartesian
-    im = im(:,:,81);
-    [kx ky ] = ndgrid(-80:79,-80:79);
-    om = [kx(:) ky(:) 0*ky(:)]';
+    [kx ky kz] = ndgrid(-80:79);
+    om = [kx(:) ky(:) kz(:)]';
 
 end
 
